@@ -11,6 +11,14 @@ Install this directory as a standard plugin in **your own installation's**
 then reload/restart FeedBack. This checkout has not been installed into siblings.
 Enable the bundled Minigames framework and Note Detection plugin.
 
+Version **0.2.1** fixes stylesheet delivery without changing the UI or game logic.
+The manifest declares `styles: "assets/game.css"`; keep that file under `assets/`
+when copying the plugin. FeedBack derives `has_styles` from the manifest and
+injects `/api/plugins/fretboard_recall/assets/game.css?v=0.2.1` as a stylesheet.
+The host rejects root-level stylesheet paths such as `game.css`; assets are
+served only through its sandboxed `assets/` route. Reload/restart after updating
+so plugin discovery sees the new path and version.
+
 **FeedBack Desktop is supported conditionally through its Electron audio
 capture**, with explicit confirmation of the host-configured device/channel.
 Native ring polling is not used. The game reads `audio.getCurrentDevice()` and
@@ -173,7 +181,16 @@ storage removes records.
 
 ## Honest remaining limitations
 
-No real microphone/DI, browser UI integration, or desktop device run was tested.
+No real microphone/DI, full host browser integration, or desktop device run was tested.
+The existing layout was rendered in installed headless Chrome at desktop (1280px)
+and narrow/mobile widths using the actual `game.js`, `assets/game.css`, and
+extracted host stylesheet injector. The isolated localhost fixture used mocked
+host tuning/lifecycle and silent audio input, not host hardware. It fetched the
+versioned CSS URL, rendered two desktop cards / one mobile column, and had no
+horizontal overflow in the measured layout viewport. The final mobile screenshot
+uses 390px device emulation with a 429px effective layout viewport, not a claim
+of pixel-perfect 390px hardware rendering. This proves stylesheet loading/rendering in that fixture,
+not behavior inside an installed FeedBack/Electron session or with core CSS.
 Desktop Electron capture is source-supported and mock-tested, not hardware
 validated. Direct native/ASIO-only capture remains blocked by the missing input
 progression API; no sibling APIs were added or modified.
@@ -218,6 +235,7 @@ concurrent host detection. These remain real-device validation tasks.
 ```sh
 npm test
 node --check game.js
+node --check test/styles.test.cjs
 git diff --check
 ```
 
@@ -234,6 +252,14 @@ Quit cancellation/propagation. UI mocks also cover held wrong-note display,
 silence/quiet/uncertain states, freshness expiry, pause/resume, retry acquisition,
 late teardown, completion, stable note DOM writes, and physical diagram ordering
 for every supported string count (including re-entrant and duplicate opens).
+Stylesheet regressions validate the shipped manifest/path/version. When a host
+checkout is available at `../feedBack` (or `FEEDBACK_HOST_DIR`), they also execute
+its actual stylesheet injector and Python manifest derivation / asset route /
+containment helper, verifying CSS contents and `text/css`, old-path rejection,
+deduplication, upgrades, and missing/pending/traversal rejection. These host tests
+skip explicitly without that checkout; Python 3 is required for the route test
+(`PYTHON` can select an interpreter). Only unrelated manifest helpers and the
+HTTP response boundary are mocked; no host application is started or installed.
 Mocks cannot prove rendered layout, screen-reader behavior, driver freshness or hardware
 DSP accuracy; no invented native timestamp fields are used in tests.
 

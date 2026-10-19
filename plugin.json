@@ -1,10 +1,10 @@
 {
   "id": "fretboard_recall",
   "name": "Fretboard Recall",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "script": "game.js",
-  "styles": "game.css",
+  "styles": "assets/game.css",
   "description": "Five passes of octave-specific note recall. Personal local records only.",
   "minigame": {
     "title": "Fretboard Recall",
