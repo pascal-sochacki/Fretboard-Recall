@@ -48,9 +48,10 @@ analysis window cannot resolve the fundamental at the required callback cadence.
    open Minigames → Fretboard Recall. No duplicated setup selectors.
 2. A round has five passes. Each selects one of all twelve pitch classes,
    excluding the preceding pass's pitch. Find that same pitch class on every
-   string, highest-side to lowest-side, within frets **0–11**, in the intended
+   string, lowest-side to highest-side (standard guitar: low E, A, D, G, B,
+   high E), within frets **0–11**, in the intended
    octave. The screen gives only note name and string instruction, not the fret,
-   answer hint, reference sound or fretboard. Accidentals have dual names.
+    answer hint, reference sound or fret locations. Accidentals have dual names.
 3. Mute all strings briefly, then pluck the requested string. The next prompt
    displays immediately on acceptance, but must observe a new mute before
    arming. Wrong notes never advance or penalize. No skip.
@@ -64,6 +65,19 @@ is claimed. String labels include number (1 = highest-side), open-note octave,
 and highest/lowest-side markers. Duplicate open names/pitches remain distinct
 by string number. Re-entrant tunings retain physical host mapping order rather
 than sorting by pitch.
+
+The responsive UI separates the prominent target pitch class from the live
+detected chromatic note and its reported octave. A physical-string diagram shows
+numbered open notes, highlighting **only the requested string**, never a fret or
+an inferred detected string. The diagram keeps highest-side at the top and
+lowest-side at the bottom; each pass starts at the bottom and progresses upward.
+Pass steps and an answer-progress bar track the round.
+Live input uses the same callback and level/confidence thresholds as grading:
+held wrong notes remain visible without advancing, while silence, quiet input,
+uncertain pitch, acquisition, pause and failure have explicit text states.
+The last note clears after 350 ms without a callback and on lifecycle resets;
+it is never relabeled as a match to the next prompt. Target changes are politely
+announced; the live note does not flood screen readers with audio-rate updates.
 
 Silence requires 180 ms below scaled PCM RMS 0.02, followed by RMS ≥0.04,
 confidence ≥0.70, and ±35 cents of the exact expected octave persisting for
@@ -216,7 +230,11 @@ mapping and mismatch/duplicate/exclusive failures, native identity changes,
 desktop capture with no DSP/monitor/ring writes,
 explicit input/permission failures, late permission cleanup, repeated processing
 timestamps, owned-node cleanup, completed browser rounds and real EventTarget
-Quit cancellation/propagation. Mocks cannot prove driver freshness or hardware
+Quit cancellation/propagation. UI mocks also cover held wrong-note display,
+silence/quiet/uncertain states, freshness expiry, pause/resume, retry acquisition,
+late teardown, completion, stable note DOM writes, and physical diagram ordering
+for every supported string count (including re-entrant and duplicate opens).
+Mocks cannot prove rendered layout, screen-reader behavior, driver freshness or hardware
 DSP accuracy; no invented native timestamp fields are used in tests.
 
 ## License

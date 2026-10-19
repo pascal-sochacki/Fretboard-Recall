@@ -1,7 +1,7 @@
 {
   "id": "fretboard_recall",
   "name": "Fretboard Recall",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "script": "game.js",
   "styles": "game.css",

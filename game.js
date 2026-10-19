@@ -11,6 +11,7 @@
   const MAX_GAP_MS = 100;
   const QUIET = 0.02;
   const LOUD = 0.04;
+  const LIVE_EXPIRES_MS = 350;
   const STORAGE_KEY = 'fretboard_recall.records.v1';
 
   function snapshotSetup(state, tunings) {
@@ -62,7 +63,8 @@
       this.lastSample = null;
     }
     target() {
-      const s = this.setup.strings[this.string];
+      // Keep the canonical setup/record mapping high-side first; practice starts on the low physical side.
+      const s = this.setup.strings[this.setup.stringCount - 1 - this.string];
       return { ...s, pitch: this.pitch, midi: s.midi + mod(this.pitch - s.midi) };
     }
     tick(dt) { if (!this.paused && !this.done) this.elapsed += dt; }
@@ -267,26 +269,45 @@
   function mount(win, container) {
     const doc = win.document;
     container.innerHTML = `<section class="fr-game" aria-label="Fretboard Recall">
-      <p class="fr-setup"></p><p class="fr-progress"></p>
-      <div class="fr-target" aria-live="polite"><p class="fr-note"></p><p class="fr-string"></p></div>
-      <p class="fr-status" role="status"></p><p class="fr-clock"></p>
+      <header class="fr-header"><div><p class="fr-eyebrow">One note. Every string.</p><h2>Fretboard Recall</h2></div><span class="fr-badge">5 passes · Local records</span></header>
+      <p class="fr-setup">Reading your FeedBack setup…</p>
+      <div class="fr-round-progress"><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
+      <div class="fr-cards">
+        <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
+        <section class="fr-live" aria-label="Live detected note"><p class="fr-eyebrow">Live input · detected note</p><p class="fr-detected">—</p><p class="fr-live-status">Not listening</p><p class="fr-hint">Reported pitch and octave only. Physical string is not detected.</p></section>
+      </div>
+      <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3><span>Open tuning · no fret hints</span></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
+      <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
       <div class="fr-summary"></div>
       <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause">Pause</button><button type="button" class="fr-retry">Retry / New round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div>
       <p class="fr-warning">Play only the requested string within frets 0–11. Microphone/DI pitch cannot verify the physical string when the same pitch exists elsewhere. Use the requested string yourself. No string detection is claimed.</p>
     </section>`;
     const el = name => container.querySelector(`.fr-${name}`);
+    const elements = new Map();
+    const cached = name => { if (!elements.has(name)) elements.set(name, el(name)); return elements.get(name); };
     let generation = 0, adapter = null, round = null, setup = null, alive = true;
     let clockTimer = null, lastClock = win.performance.now(), lastInput = lastClock;
     let error = false, acquiring = false, starting = false;
     let desktopInput = null;
+    let stringRows = [], passSteps = [];
+    let liveState = '', liveNote = '', liveAt = null;
     const host = win.feedBack;
     const quit = doc.getElementById('mg-stage-quit');
-    const text = (name, value) => { el(name).textContent = value; };
-    const release = () => { generation++; adapter?.stop(); adapter = null; acquiring = false; starting = false; };
+    const text = (name, value) => { const node = cached(name); if (node.textContent !== value) node.textContent = value; };
+    function setLive(state, note = '—') {
+      if (liveState === state && liveNote === note) return;
+      const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet for pitch detection', uncertain: 'Uncertain pitch · play one clear note', detected: 'Pitch detected · reported octave', paused: 'Paused · input display cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio · last pitch cleared' };
+      liveState = state; liveNote = note;
+      cached('live').setAttribute('data-state', state);
+      text('detected', note); text('live-status', labels[state]);
+    }
+    function resetLive(state) { liveAt = null; setLive(state); }
+    const release = () => { generation++; adapter?.stop(); adapter = null; acquiring = false; starting = false; resetLive('stopped'); };
     const fail = e => {
       if (!alive || error) return;
       error = true;
       release();
+      resetLive('failed');
       el('input').hidden = true;
       round?.pause(true);
       text('status', `${e.message || e} No record saved. Check host settings, then Retry.`);
@@ -305,11 +326,47 @@
       release(); host.navigate('settings');
     };
 
+    function renderSetup() {
+      stringRows = setup.strings.map(s => {
+        const row = doc.createElement('li');
+        row.className = 'fr-string-row';
+        const number = doc.createElement('span'); number.className = 'fr-string-number'; number.textContent = `${setup.stringCount - s.index}`;
+        const wire = doc.createElement('span'); wire.className = 'fr-wire'; wire.setAttribute('aria-hidden', 'true'); wire.style.setProperty('--fr-wire-width', `${1 + (setup.stringCount - s.index - 1) * 0.45}px`);
+        const open = doc.createElement('span'); open.className = 'fr-open-note'; open.textContent = `${noteName(s.midi)}${Math.floor(s.midi / 12) - 1}`;
+        const instruction = doc.createElement('span'); instruction.className = 'fr-string-instruction';
+        row.setAttribute('aria-label', s.label);
+        row.appendChild(number); row.appendChild(wire); row.appendChild(open); row.appendChild(instruction);
+        return { row, instruction };
+      });
+      cached('strings').replaceChildren(...stringRows.map(s => s.row));
+      passSteps = Array.from({ length: 5 }, (_, i) => {
+        const step = doc.createElement('span'); step.className = 'fr-pass'; step.textContent = `${i + 1}`; return step;
+      });
+      cached('passes').replaceChildren(...passSteps);
+      cached('completion').max = 5 * setup.stringCount;
+    }
+    function renderProgress() {
+      cached('completion').value = round.answers.length;
+      passSteps.forEach((step, i) => {
+        const state = round.done || i < round.pass ? 'complete' : i === round.pass ? 'current' : 'upcoming';
+        step.setAttribute('data-state', state);
+        step.setAttribute('aria-label', `Pass ${i + 1}: ${state}`);
+      });
+      stringRows.forEach(({ row, instruction }, i) => {
+        const position = setup.stringCount - 1 - i;
+        const state = round.done ? 'complete' : position < round.string ? 'complete' : position === round.string ? 'current' : 'upcoming';
+        row.setAttribute('data-state', state);
+        if (state === 'current') row.setAttribute('aria-current', 'step'); else row.removeAttribute('aria-current');
+        instruction.textContent = state === 'current' ? 'Play this string' : state === 'complete' ? 'Done' : 'Up next';
+      });
+    }
     function renderPrompt() {
       const target = round.target();
       text('note', noteName(target.pitch));
-      text('string', target.label);
-      text('progress', `Pass ${round.pass + 1} / 5 · String ${round.string + 1} / ${setup.stringCount} · ${round.answers.length} / ${5 * setup.stringCount} accepted`);
+      const number = setup.stringCount - target.index;
+      text('string', `String ${number}${number === 1 ? ' · highest-side' : number === setup.stringCount ? ' · lowest-side' : ''}`);
+      text('progress', `Pass ${round.pass + 1} / 5 · Step ${round.string + 1} / ${setup.stringCount} · ${round.answers.length} / ${5 * setup.stringCount} accepted`);
+      renderProgress();
       text('status', 'Mute all strings briefly; then pluck the requested string.');
       // Start timing after assigning the prompt, never after the mute gate.
       round.displayed();
@@ -321,13 +378,16 @@
       if (!alive) return;
       round?.tick(dt);
       if (round && !round.done) text('clock', `Round ${seconds(round.elapsed)} · This prompt ${seconds(round.elapsed - round.promptAt)}${round.paused ? ' · paused' : ''}`);
+      if (liveAt !== null && !round?.paused && now - liveAt > LIVE_EXPIRES_MS) resetLive('expired');
       if (adapter && !round?.paused && now - lastInput > 2000) fail(new Error('Live input frames stopped arriving.'));
     }
     function finish() {
       release();
+      resetLive('complete');
       el('pause').disabled = true;
       const result = round.summary();
       text('note', ''); text('string', ''); text('progress', `Completed: 5 passes · ${round.answers.length} accepted`);
+      renderProgress();
       text('clock', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
       const summary = el('summary'); summary.replaceChildren();
       for (const s of result.strings) {
@@ -344,6 +404,18 @@
       updateClock();
       lastInput = win.performance.now();
       if (!round || round.paused || round.done || error) return;
+      // Mirror the grading admission checks before it advances its timestamp.
+      // Never display a stale/invalid estimate as a stable live note.
+      const valid = Number.isFinite(value.captureTime) && (round.lastCaptureTime === null || value.captureTime > round.lastCaptureTime) && Number.isFinite(value.level) && value.level >= 0 && value.level <= 1;
+      liveAt = lastInput;
+      if (!valid) setLive('uncertain');
+      else if (value.level < QUIET) setLive('silence');
+      else if (value.level < LOUD) setLive('quiet');
+      else if (!Number.isFinite(value.midi) || !(value.confidence >= 0.7)) setLive('uncertain');
+      else {
+        const midi = Math.round(value.midi);
+        setLive('detected', `${noteName(midi)}${Math.floor(midi / 12) - 1}`);
+      }
       if (round.sample(value, lastInput)) {
         if (round.done) finish(); else renderPrompt();
         return;
@@ -353,16 +425,22 @@
     async function acquire() {
       const gen = ++generation;
       acquiring = true;
+      resetLive('acquiring');
       const cancelled = () => !alive || generation !== gen;
       const received = value => { if (!cancelled()) sample(value); };
       try {
         const handle = await openBrowser(win, setup, received, e => { if (!cancelled()) fail(e); }, cancelled, desktopInput);
         if (cancelled()) { handle.stop(); return; }
         adapter = handle; acquiring = false; lastInput = win.performance.now();
+        if (liveAt === null && !round?.paused) setLive('listening');
       } catch (e) { if (!cancelled()) fail(e); }
     }
     async function begin() {
       release(); error = false; round = null;
+      resetLive('startup');
+      setup = null; stringRows = []; passSteps = [];
+      cached('strings').replaceChildren(); cached('passes').replaceChildren(); cached('completion').value = 0;
+      text('setup', 'Reading your FeedBack setup…');
       starting = true;
       desktopInput = null; el('input').hidden = true;
       text('status', 'Reading current FeedBack instrument and tuning…');
@@ -379,12 +457,14 @@
         const after = host.workingTuning.get();
         if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error('Host setup changed during startup. Retry.');
         setup = snapshotSetup(after, tunings);
+        renderSetup();
         text('setup', `${setup.instrument} · ${setup.stringCount} strings · A4 ${setup.referencePitch} Hz · ${after.provenance === 'verified' ? 'host tuning marked verified' : 'host tuning assumed, not physically verified'}`);
         if (win.feedBackDesktop?.isDesktop) {
           const input = await resolveDesktopInput(win);
           if (!alive || gen !== generation) return;
           if (snapshotSetup(host.workingTuning.get(), tunings).key !== setup.key) throw new Error('Host setup changed during input resolution. Retry.');
           desktopInput = input;
+          resetLive('consent');
           text('status', `Desktop input: ${input.label} · ${input.channel === 'mono' ? 'Mono (first pair)' : input.channel === 'left' ? 'Channel 1' : 'Channel 2'} (${input.nativeType}). Confirm to open this exact device through Electron capture, not native/ASIO polling. Native routing and monitoring remain untouched; exclusive devices may refuse simultaneous capture.`);
           text('input', `Use Electron capture: ${input.label}`); el('input').hidden = false;
           el('input').onclick = () => {
@@ -410,6 +490,7 @@
       if (!round || round.done || error) return;
       updateClock();
       round.pause(!round.paused);
+      resetLive(round.paused ? 'paused' : 'listening');
       text('pause', round.paused ? 'Resume' : 'Pause');
       text('status', round.paused ? 'Paused. Resume, mute, then pluck; paused time is excluded.' : 'Mute all strings briefly; then pluck the requested string.');
       lastInput = win.performance.now();

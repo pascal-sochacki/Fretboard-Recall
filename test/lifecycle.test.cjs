@@ -166,11 +166,11 @@ test('exact-device mismatch stops stream instead of accepting a substituted inpu
 
 function dom() {
   const nodes = new Map(), subscriptions = new Map(), timers = new Set(); let now = 0;
-  const node = () => ({ textContent: '', disabled: false, children: [], replaceChildren() { this.children = []; }, appendChild(n) { this.children.push(n); } });
+  const node = () => ({ _text: '', writes: 0, get textContent() { return this._text; }, set textContent(value) { this._text = value; this.writes++; }, disabled: false, children: [], attributes: {}, style: { setProperty() {} }, setAttribute(k, v) { this.attributes[k] = v; }, removeAttribute(k) { delete this.attributes[k]; }, replaceChildren(...children) { this.children = children; }, appendChild(n) { this.children.push(n); } });
   // EventTarget executes capture listeners before the framework's onclick.
   const quit = new EventTarget(); let publicEnds = 0;
   const quitClick = () => { const event = new Event('click', { cancelable: true }); if (quit.dispatchEvent(event)) publicEnds++; };
-  const container = { innerHTML: '', querySelector: k => { if (!nodes.has(k)) nodes.set(k, node()); return nodes.get(k); } };
+  const container = { innerHTML: '', querySelector(k) { assert.match(this.innerHTML, new RegExp(`class="[^"]*\\b${k.slice(1)}\\b`), `Selector ${k} must exist in mounted markup`); if (!nodes.has(k)) nodes.set(k, node()); return nodes.get(k); } };
   const doc = new EventTarget(); doc.getElementById = () => quit; doc.createElement = node;
   const host = { workingTuning: { get: () => ({ instrument: 'guitar', stringCount: 6, offsets: setup.offsets.slice(), referencePitch: 440 }) }, on: (k, cb) => subscriptions.set(k, cb), off: k => subscriptions.delete(k), navigate: id => subscriptions.get('screen:changing')?.({ detail: { id } }) };
   const win = { document: doc, feedBack: host, performance: { now: () => now }, setInterval: cb => { timers.add(cb); return cb; }, clearInterval: cb => timers.delete(cb), fetch: async () => ({ ok: true, json: async () => ({ tuningMidis: { 'guitar-6': { Standard: [40, 45, 50, 55, 59, 64] } } }) }) };
@@ -194,6 +194,8 @@ test('complete mounted browser round saves once locally and never submits framew
   const records = new Map(); d.win.localStorage = { getItem: k => k === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : records.get(k), setItem: (k, v) => { saves++; records.set(k, v); } };
   d.win.feedBackMinigames = { end: () => assert.fail('public submission') };
   const game = mount(d.win, d.container); await game.begin(); let time = 0;
+  assert.equal(d.nodes.get('.fr-string').textContent, 'String 6 · lowest-side');
+  assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
   const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
   const opens = [64, 59, 55, 50, 45, 40];
@@ -201,11 +203,23 @@ test('complete mounted browser round saves once locally and never submits framew
     for (let i = 0; i < 4; i++) emit(0);
     const pc = names.indexOf(d.nodes.get('.fr-note').textContent);
     const string = +d.nodes.get('.fr-string').textContent.match(/String (\d)/)[1] - 1;
+    assert.equal(string, 5 - answer % 6);
+    assert.equal(d.nodes.get('.fr-progress').textContent, `Pass ${Math.floor(answer / 6) + 1} / 5 · Step ${answer % 6 + 1} / 6 · ${answer} / 30 accepted`);
+    assert.doesNotMatch(d.nodes.get('.fr-progress').textContent, /String/);
+    const rows = d.nodes.get('.fr-strings').children;
+    rows.forEach((row, i) => {
+      assert.equal(row.attributes['data-state'], i > string ? 'complete' : i === string ? 'current' : 'upcoming');
+      assert.equal(row.attributes['aria-current'], i === string ? 'step' : undefined);
+    });
     const midi = opens[string] + ((pc - opens[string]) % 12 + 12) % 12;
     freq = 440 * 2 ** ((midi - 69) / 12);
     for (let i = 0; i < 3; i++) emit(.05);
   }
   assert.match(d.nodes.get('.fr-progress').textContent, /Completed: 5 passes/);
+  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
+  assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'complete');
+  assert.equal(d.nodes.get('.fr-completion').value, 30);
+  assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
   assert.deepEqual(b.counts(), { stopped: 1, closed: 1 }); game.stop(); assert.equal(d.timers.size, 0);
 });
@@ -218,6 +232,8 @@ test('desktop mounted startup waits for explicit input confirmation before captu
   d.win.navigator.mediaDevices.getUserMedia = async constraints => { captures++; return get(constraints); };
   const game = mount(d.win, d.container); await game.begin();
   assert.equal(captures, 0); assert.equal(d.nodes.get('.fr-input').hidden, false);
+  assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'consent');
+  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
   assert.match(d.nodes.get('.fr-status').textContent, /USB DI.*Channel 2.*Confirm/);
   d.nodes.get('.fr-input').onclick();
   for (let i = 0; i < 20; i++) await Promise.resolve();
@@ -257,5 +273,118 @@ test('unannounced tuning changes during identity resolution or before consent ar
     if (!duringResolution) d.nodes.get('.fr-input').onclick();
     assert.equal(d.nodes.get('.fr-input').hidden, true); assert.equal(d.nodes.get('.fr-note').textContent, '');
     assert.match(d.nodes.get('.fr-status').textContent, /setup changed/); assert.equal(captures, 0); game.stop();
+  }
+});
+
+test('live card shows wrong pitches, clears uncertain/silent input and preserves only the acceptance sample', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  let midi = 61, confidence = 1, time = 0;
+  d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((midi - 69) / 12), confidence });
+  const game = mount(d.win, d.container); await game.begin();
+  const get = name => d.nodes.get(`.fr-${name}`);
+  const state = () => get('live').attributes['data-state'];
+  const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
+  assert.equal(state(), 'listening');
+  assert.match(d.container.innerHTML, /aria-live="polite" aria-atomic="true"/);
+  assert.doesNotMatch(d.container.innerHTML.match(/<section class="fr-live"[\s\S]*?<\/section>/)[0], /aria-live|role="status"/);
+  const prompt = get('note').textContent;
+  for (let i = 0; i < 4; i++) emit(0);
+  assert.equal(state(), 'silence'); assert.equal(get('detected').textContent, '—');
+  // This octave is above every possible low-E answer.
+  for (let i = 0; i < 5; i++) emit(.05);
+  assert.equal(get('detected').textContent, 'C♯ / D♭4');
+  assert.equal(state(), 'detected'); assert.equal(get('completion').value, 0);
+  assert.equal(get('note').textContent, prompt);
+  const writes = get('detected').writes;
+  emit(.05); emit(.05);
+  assert.equal(get('detected').writes, writes, 'Unchanged detected notes must not rewrite DOM');
+  confidence = .69; emit(.05);
+  assert.equal(state(), 'uncertain'); assert.equal(get('detected').textContent, '—');
+  confidence = 1; emit(.005);
+  assert.equal(state(), 'quiet'); assert.equal(get('detected').textContent, '—');
+  emit(0); assert.equal(state(), 'silence');
+  const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+  const pc = names.indexOf(prompt); midi = 40 + ((pc - 40) % 12 + 12) % 12;
+  for (let i = 0; i < 3; i++) emit(.05);
+  assert.equal(get('completion').value, 1);
+  assert.match(get('string').textContent, /String 5/);
+  assert.equal(get('detected').textContent, `${names[pc]}${Math.floor(midi / 12) - 1}`);
+  assert.equal(state(), 'detected');
+  assert.match(get('status').textContent, /Mute/);
+  assert.equal(get('strings').children[5].children[3].textContent, 'Done');
+  assert.equal(get('strings').children[4].children[3].textContent, 'Play this string');
+  d.advance(351); assert.equal(state(), 'expired'); assert.equal(get('detected').textContent, '—');
+  emit(.05); assert.equal(state(), 'detected');
+  get('pause').onclick(); assert.equal(state(), 'paused'); assert.equal(get('detected').textContent, '—');
+  emit(.05); assert.equal(state(), 'paused');
+  get('pause').onclick(); assert.equal(state(), 'listening'); assert.equal(get('detected').textContent, '—');
+  emit(.05); assert.equal(state(), 'detected');
+  d.advance(2100); assert.equal(state(), 'failed'); assert.equal(get('detected').textContent, '—');
+  assert.match(get('status').textContent, /frames stopped/);
+  await game.begin(); assert.equal(state(), 'listening'); assert.equal(get('completion').value, 0);
+  game.stop(); assert.equal(state(), 'stopped'); assert.equal(get('detected').textContent, '—');
+});
+
+test('retry clears pitch during deferred acquisition and late teardown cannot restore it', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  const game = mount(d.win, d.container); await game.begin();
+  d.advance(85); b.emit(b.frame(.05), .085);
+  assert.equal(d.nodes.get('.fr-detected').textContent, 'A4');
+  const pending = deferred(); d.win.navigator.mediaDevices.getUserMedia = () => pending.promise;
+  const retrying = game.begin();
+  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
+  assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'startup');
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'acquiring');
+  game.stop(); pending.resolve(b.stream); await retrying;
+  assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'stopped');
+  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
+  assert.deepEqual(b.counts(), { stopped: 2, closed: 1 });
+});
+
+test('string diagram follows indexed physical mapping, not pitch sorting, for every supported count', async () => {
+  for (const [instrument, count] of [['guitar', 6], ['guitar', 7], ['guitar', 8], ['bass', 4], ['bass', 5], ['bass', 6]]) {
+    const d = dom(), b = browser(); Object.assign(d.win, b.win);
+    // Re-entrant, duplicate opens: highest-side is deliberately the lowest pitch.
+    const opens = Array.from({ length: count }, (_, i) => i === count - 1 ? 40 : 64);
+    const state = { instrument, stringCount: count, offsets: opens.map(() => 0), referencePitch: 440 };
+    const tunings = { tuningMidis: { [`${instrument}-${count}`]: { Standard: opens } } };
+    d.win.feedBack.workingTuning.get = () => state;
+    d.win.fetch = async () => ({ ok: true, json: async () => tunings });
+    let time = 0, midi;
+    d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((midi - 69) / 12), confidence: 1 });
+    const game = mount(d.win, d.container); await game.begin();
+    const rows = d.nodes.get('.fr-strings').children;
+    assert.equal(rows.length, count);
+    assert.equal(rows[0].children[2].textContent, 'E2');
+    assert.equal(rows[count - 1].children[2].textContent, 'E4');
+    rows.forEach((row, i) => {
+      assert.equal(row.children[0].textContent, `${i + 1}`);
+      assert.equal(row.attributes['data-state'], i === count - 1 ? 'current' : 'upcoming');
+      assert.equal(row.attributes['aria-current'], i === count - 1 ? 'step' : undefined);
+    });
+    assert.equal(d.nodes.get('.fr-completion').max, 5 * count);
+    assert.equal(d.nodes.get('.fr-passes').children.length, 5);
+    assert.equal(d.nodes.get('.fr-passes').children[0].attributes['data-state'], 'current');
+    assert.equal(d.nodes.get('.fr-string').textContent, `String ${count} · lowest-side`);
+    const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
+    const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+    for (let answer = 0; answer < 5 * count; answer++) {
+      const index = answer % count;
+      assert.match(d.nodes.get('.fr-string').textContent, new RegExp(`^String ${count - index}(?: ·|$)`));
+      assert.equal(d.nodes.get('.fr-progress').textContent, `Pass ${Math.floor(answer / count) + 1} / 5 · Step ${index + 1} / ${count} · ${answer} / ${5 * count} accepted`);
+      rows.forEach((row, i) => {
+        const position = count - 1 - i;
+        assert.equal(row.attributes['data-state'], position < index ? 'complete' : position === index ? 'current' : 'upcoming');
+        assert.equal(row.attributes['aria-current'], position === index ? 'step' : undefined);
+      });
+      const pc = names.indexOf(d.nodes.get('.fr-note').textContent);
+      midi = opens[index] + ((pc - opens[index]) % 12 + 12) % 12;
+      for (let i = 0; i < 4; i++) emit(0);
+      for (let i = 0; i < 3; i++) emit(.05);
+    }
+    assert.equal(d.nodes.get('.fr-completion').value, 5 * count);
+    assert.ok(rows.every(row => row.attributes['data-state'] === 'complete'));
+    game.stop();
   }
 });

@@ -33,7 +33,9 @@ test('all 12 notes have exactly one intended fret in 0–11 on all supported map
       for (let i = 0; i < +n; i++) {
         r.string = i;
         const target = r.target();
-        assert.ok(target.midi - s.strings[i].midi >= 0 && target.midi - s.strings[i].midi <= 11);
+        const open = s.strings[+n - 1 - i].midi;
+        assert.equal(target.index, i);
+        assert.ok(target.midi - open >= 0 && target.midi - open <= 11);
         assert.equal(target.midi % 12, pc);
       }
     }
@@ -63,6 +65,39 @@ test('unsupported, unresolved and malformed host setup fails without standard fa
 test('exact setup key separates instrument, mapping, tuning and reference', () => {
   const keys = [setup(), setup('guitar', 6, [-2, 0, 0, 0, 0, 0]), setup('guitar', 7), setup('bass', 6), setup('guitar', 6, [0, 0, 0, 0, 0, 0], 442)].map(s => s.key);
   assert.equal(new Set(keys).size, keys.length);
+});
+test('every pass progresses low physical side to high for standard, custom and re-entrant mappings', () => {
+  for (const [key, base] of Object.entries(bases)) {
+    const [instrument, count] = key.split('-');
+    const n = +count;
+    for (const [mapping, offsets] of [
+      [base, Array(n).fill(0)],
+      [base, Array.from({ length: n }, (_, i) => i % 2 ? 2 : -2)],
+      [Array.from({ length: n }, (_, i) => i === n - 1 ? 40 : 64), Array(n).fill(0)],
+    ]) {
+      const s = snapshotSetup({ instrument, stringCount: n, offsets, referencePitch: 440 }, { tuningMidis: { [key]: { Standard: mapping } } });
+      const canonical = Array.from({ length: n }, (_, i) => [n - 1 - i, mapping[n - 1 - i] + offsets[n - 1 - i]]);
+      assert.deepEqual(s.strings.map(s => [s.index, s.midi]), canonical);
+      assert.equal(s.key, JSON.stringify([instrument, n, offsets, 440, canonical]));
+      const r = new Round(s, () => .5);
+      let time = 0;
+      for (let pass = 0; pass < 5; pass++) {
+        for (let index = 0; index < n; index++) {
+          const target = r.target();
+          const open = mapping[index] + offsets[index];
+          assert.equal(r.pass, pass);
+          assert.equal(target.index, index);
+          assert.equal(target.midi, open + ((r.pitch - open) % 12 + 12) % 12);
+          time = accept(r, time) + 20;
+          if (!r.done) r.displayed();
+        }
+      }
+      assert.equal(r.done, true);
+      assert.deepEqual(r.answers.map(a => a.stringIndex), Array.from({ length: 5 * n }, (_, i) => i % n));
+      assert.deepEqual(r.summary().strings.map(s => s.index), canonical.map(s => s[0]));
+      assert.deepEqual(s.strings.map(s => [s.index, s.midi]), canonical);
+    }
+  }
 });
 test('ringing, wrong pitches, low confidence and wrong octaves never advance', () => {
   const r = new Round(setup());
