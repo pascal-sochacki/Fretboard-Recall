@@ -1,0 +1,261 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const { openBrowser, resolveDesktopInput, mount, snapshotSetup, Round } = require('../game.js');
+const setup = snapshotSetup({ instrument: 'guitar', stringCount: 6, offsets: [0, 0, 0, 0, 0, 0], referencePitch: 440 }, { tuningMidis: { 'guitar-6': { Standard: [40, 45, 50, 55, 59, 64] } } });
+const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+
+function browser() {
+  const nodes = [], calls = [], errors = [], samples = [];
+  let stopped = 0, closed = 0, frameSize;
+  const node = () => { const n = { gain: { value: 1 }, connect() {}, disconnect() { this.disconnected = true; } }; nodes.push(n); return n; };
+  const track = { label: 'USB DI', readyState: 'live', muted: false, stop: () => stopped++, getSettings: () => ({ channelCount: 2, deviceId: 'chosen' }) };
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
+  class Context {
+    constructor() { this.state = 'running'; this.sampleRate = 48000; }
+    async resume() {} async close() { closed++; }
+    createMediaStreamSource() { return node(); } createGain() { return node(); }
+    createChannelSplitter() { return node(); }
+    createScriptProcessor(size) { frameSize = size; const n = node(); n.meter = true; return n; }
+  }
+  const win = {
+    AudioContext: Context,
+    localStorage: { getItem: () => '{"channel":"right","deviceId":"chosen","method":"crepe"}' },
+    navigator: { mediaDevices: { getUserMedia: async ({ audio }) => { assert.deepEqual(audio.deviceId, { exact: 'chosen' }); return stream; } } },
+    _ndYinDetect: (frame, rate, minHz) => { calls.push({ frame, rate, minHz }); return { freq: 440, confidence: .95 }; },
+    createNoteDetector: () => assert.fail('Async detector must never be constructed'),
+  };
+  return { win, nodes, calls, errors, samples, track, stream, frame: value => new Float32Array(frameSize).fill(value), emit: (frame, time) => nodes.find(n => n.meter).onaudioprocess?.({ playbackTime: time, inputBuffer: { getChannelData: () => frame } }), counts: () => ({ stopped, closed }) };
+}
+
+test('safe pending and immediate registration matches manifest once', () => {
+  const source = fs.readFileSync(require.resolve('../game.js'), 'utf8');
+  const id = JSON.parse(fs.readFileSync(require.resolve('../plugin.json'), 'utf8')).id;
+  for (const ready of [true, false]) {
+    const registered = []; const window = ready ? { feedBackMinigames: { register: s => registered.push(s) } } : {};
+    const context = vm.createContext({ window }); vm.runInContext(source, context); vm.runInContext(source, context);
+    const specs = ready ? registered : window.__feedBackMinigamesPending;
+    assert.equal(specs.length, 1); assert.equal(specs[0].id, id);
+  }
+});
+test('desktop requires consent before touching retained DSP, monitor, padded ring or permission', async () => {
+  const b = browser();
+  b.win.feedBackDesktop = { isDesktop: true, audio: new Proxy({}, { get() { assert.fail('Native API must not be touched'); } }) };
+  b.win.navigator.mediaDevices.getUserMedia = () => assert.fail('Native input must not fall back to a browser mic');
+  await assert.rejects(openBrowser(b.win, setup, () => assert.fail('sample'), () => {}, () => false), /explicit confirmation/);
+});
+function desktop(b) {
+  const intervals = new Map(); let id = 0;
+  const state = { input: 'USB DI', inputType: 'CoreAudio', channel: 1, devices: [{ kind: 'audioinput', label: 'USB DI', deviceId: 'chosen' }] };
+  b.win.navigator.mediaDevices.enumerateDevices = async () => state.devices;
+  const methods = { getCurrentDevice: async () => ({ input: state.input, inputType: state.inputType }), listSources: async () => [{ id: 0, active: true, deviceKey: 0, inputChannel: state.channel }] };
+  b.win.feedBackDesktop = { isDesktop: true, audio: new Proxy(methods, { get(target, name) { if (!(name in target)) assert.fail(`Must not invoke native mutation/poll: ${String(name)}`); return target[name]; } }) };
+  b.win.setInterval = cb => { intervals.set(++id, cb); return id; }; b.win.clearInterval = id => intervals.delete(id);
+  return { state, intervals };
+}
+test('desktop maps only unique exact configured device and first-pair channel', async () => {
+  const b = browser(), d = desktop(b);
+  const input = await resolveDesktopInput(b.win);
+  assert.equal(input.deviceId, 'chosen'); assert.equal(input.channel, 'right');
+  for (const devices of [[], [{ kind: 'audioinput', label: 'USB DI alias', deviceId: 'chosen' }], [{ kind: 'audioinput', label: 'USB DI', deviceId: 'default' }], [{ kind: 'audioinput', label: 'USB DI', deviceId: 'a' }, { kind: 'audioinput', label: 'USB DI', deviceId: 'b' }]]) {
+    d.state.devices = devices; await assert.rejects(resolveDesktopInput(b.win), /unique exact-name/);
+  }
+  d.state.channel = 2; await assert.rejects(resolveDesktopInput(b.win), /channel cannot be mapped/);
+});
+test('desktop consent opens confirmed Electron device with private final mute, no native writes', async () => {
+  const b = browser(), d = desktop(b), input = await resolveDesktopInput(b.win);
+  const handle = await openBrowser(b.win, setup, s => b.samples.push(s), e => b.errors.push(e), () => false, input);
+  b.emit(b.frame(.05), 0); assert.equal(b.samples.length, 1); assert.equal(b.samples[0].midi, 69);
+  assert.equal(d.intervals.size, 1); assert.equal(b.nodes.filter(n => n.gain.value === 0).length, 1);
+  handle.stop(); assert.equal(d.intervals.size, 0); assert.deepEqual(b.counts(), { stopped: 1, closed: 1 });
+});
+test('desktop confirmation invalidated by native input change before capture', async () => {
+  const b = browser(), d = desktop(b), input = await resolveDesktopInput(b.win);
+  d.state.channel = 0;
+  b.win.navigator.mediaDevices.getUserMedia = () => assert.fail('No capture after identity change');
+  await assert.rejects(openBrowser(b.win, setup, () => {}, () => {}, () => false, input), /changed after confirmation/);
+});
+test('desktop device/channel watcher stops only owned Electron stream', async () => {
+  const b = browser(), d = desktop(b), input = await resolveDesktopInput(b.win);
+  const handle = await openBrowser(b.win, setup, () => {}, e => b.errors.push(e), () => false, input);
+  d.state.channel = 0;
+  await [...d.intervals.values()][0]();
+  assert.match(b.errors[0].message, /device\/channel changed/); assert.equal(d.intervals.size, 0);
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 1 }); handle.stop();
+});
+test('desktop stream-label mismatch and exclusive-device denial do not substitute input', async () => {
+  const b = browser(); desktop(b); const input = await resolveDesktopInput(b.win);
+  b.track.label = 'Other input';
+  await assert.rejects(openBrowser(b.win, setup, () => {}, () => {}, () => false, input), /stream label/);
+  const denied = browser(); desktop(denied); const consent = await resolveDesktopInput(denied.win);
+  denied.win.navigator.mediaDevices.getUserMedia = async () => { throw new Error('Device in use (exclusive)'); };
+  await assert.rejects(openBrowser(denied.win, setup, () => {}, () => {}, () => false, consent), /exclusive/);
+});
+test('desktop late consent capture cancellation releases only the arriving Electron stream', async () => {
+  const b = browser(), d = desktop(b), input = await resolveDesktopInput(b.win), pending = deferred();
+  let cancelled = false;
+  b.win.navigator.mediaDevices.getUserMedia = () => pending.promise;
+  const opening = openBrowser(b.win, setup, () => assert.fail('late sample'), () => {}, () => cancelled, input);
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  cancelled = true; pending.resolve(b.stream);
+  const handle = await opening; handle.stop();
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 0 }); assert.equal(d.intervals.size, 0);
+});
+test('async-only host detector fails visibly before permission; no invented estimate freshness', async () => {
+  const b = browser(); delete b.win._ndYinDetect;
+  b.win.navigator.mediaDevices.getUserMedia = () => assert.fail('No capture with unsupported detector');
+  await assert.rejects(openBrowser(b.win, setup, () => {}, () => {}, () => false), /async pitch snapshots are unsupported/);
+});
+test('late permission resolution cleans up stream before building nodes', async () => {
+  const b = browser(), pending = deferred(); let cancelled = false;
+  b.win.navigator.mediaDevices.getUserMedia = () => pending.promise;
+  const opening = openBrowser(b.win, setup, () => {}, () => {}, () => cancelled);
+  cancelled = true; pending.resolve(b.stream); const handle = await opening; handle.stop();
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 0 }); assert.equal(b.nodes.length, 0);
+});
+test('explicit device/channel and permission failures offer recovery instead of substitution', async () => {
+  const b = browser(); b.win.localStorage.getItem = () => '{"channel":"mono"}';
+  await assert.rejects(openBrowser(b.win, setup, () => {}, () => {}, () => false), /explicit browser input/);
+  b.win.localStorage.getItem = () => '{"channel":"mono","deviceId":"chosen"}';
+  b.win.navigator.mediaDevices.getUserMedia = async () => { throw new Error('Permission denied'); };
+  await assert.rejects(openBrowser(b.win, setup, () => {}, () => {}, () => false), /Permission denied/);
+});
+test('sync host DSP consumes each complete callback buffer; async snapshots cannot leak stale pitch', async () => {
+  const b = browser(); const r = new Round(setup);
+  r.pitch = 9;
+  b.win.noteDetect = { getCalibrationSnapshot: () => ({ rawMidi: r.target().midi, heardConfidencePct: 100 }) };
+  const freq = 440 * 2 ** ((r.target().midi - 69) / 12);
+  let correct = true;
+  b.win._ndYinDetect = (frame, rate) => { b.calls.push({ frame, rate }); return { freq: correct ? freq : freq * 2 ** (1 / 12), confidence: 1 }; };
+  const handle = await openBrowser(b.win, setup, s => { b.samples.push(s); r.tick(85); r.sample(s, s.captureTime); }, e => b.errors.push(e), () => false);
+  for (let i = 0; i < 4; i++) b.emit(b.frame(0), i * .085);
+  assert.equal(r.armed, true);
+  b.emit(b.frame(.05), .34);
+  correct = false;
+  for (let i = 5; i < 10; i++) b.emit(b.frame(.05), i * .085);
+  assert.equal(r.answers.length, 0); assert.equal(b.calls.length, 6);
+  assert.equal(new Set(b.calls.map(c => c.frame)).size, 6);
+  correct = true;
+  for (let i = 10; i < 13; i++) b.emit(b.frame(.05), i * .085);
+  assert.equal(r.answers.length, 1);
+  handle.stop(); handle.stop(); assert.deepEqual(b.counts(), { stopped: 1, closed: 1 });
+  assert.ok(b.nodes.every(n => n.disconnected)); assert.equal(b.errors.length, 0);
+  assert.equal(b.nodes.filter(n => n.gain.value === 0).length, 1);
+});
+test('reused or absent real processing timestamp terminates capture before analysis/admission', async () => {
+  for (const time of [0, undefined, NaN]) {
+    const b = browser(); const handle = await openBrowser(b.win, setup, s => b.samples.push(s), e => b.errors.push(e), () => false);
+    b.emit(b.frame(0), 0); b.emit(b.frame(.05), time);
+    assert.equal(b.samples.length, 1); assert.equal(b.calls.length, 0);
+    assert.match(b.errors[0].message, /timestamps/); assert.equal(b.counts().stopped, 1); handle.stop();
+  }
+});
+test('async or underbuffered primitive fails instead of admitting a held estimate', async () => {
+  for (const result of [Promise.resolve({ freq: 440, confidence: 1 }), { freq: 440, confidence: 1, underBuffered: true }]) {
+    const b = browser(); b.win._ndYinDetect = () => result;
+    const handle = await openBrowser(b.win, setup, () => assert.fail('sample'), e => b.errors.push(e), () => false);
+    b.emit(b.frame(.05), 0); assert.match(b.errors[0].message, /incompatible/); handle.stop();
+  }
+});
+test('exact-device mismatch stops stream instead of accepting a substituted input', async () => {
+  const b = browser(); b.track.getSettings = () => ({ deviceId: 'other', channelCount: 2 });
+  await assert.rejects(openBrowser(b.win, setup, () => {}, () => {}, () => false), /did not confirm/);
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 1 });
+});
+
+function dom() {
+  const nodes = new Map(), subscriptions = new Map(), timers = new Set(); let now = 0;
+  const node = () => ({ textContent: '', disabled: false, children: [], replaceChildren() { this.children = []; }, appendChild(n) { this.children.push(n); } });
+  // EventTarget executes capture listeners before the framework's onclick.
+  const quit = new EventTarget(); let publicEnds = 0;
+  const quitClick = () => { const event = new Event('click', { cancelable: true }); if (quit.dispatchEvent(event)) publicEnds++; };
+  const container = { innerHTML: '', querySelector: k => { if (!nodes.has(k)) nodes.set(k, node()); return nodes.get(k); } };
+  const doc = new EventTarget(); doc.getElementById = () => quit; doc.createElement = node;
+  const host = { workingTuning: { get: () => ({ instrument: 'guitar', stringCount: 6, offsets: setup.offsets.slice(), referencePitch: 440 }) }, on: (k, cb) => subscriptions.set(k, cb), off: k => subscriptions.delete(k), navigate: id => subscriptions.get('screen:changing')?.({ detail: { id } }) };
+  const win = { document: doc, feedBack: host, performance: { now: () => now }, setInterval: cb => { timers.add(cb); return cb; }, clearInterval: cb => timers.delete(cb), fetch: async () => ({ ok: true, json: async () => ({ tuningMidis: { 'guitar-6': { Standard: [40, 45, 50, 55, 59, 64] } } }) }) };
+  return { win, container, nodes, quit, quitClick, subscriptions, timers, ends: () => publicEnds, advance: ms => { now += ms; timers.forEach(cb => cb()); } };
+}
+test('Quit actually prevents default and stops same-target listeners, not only directly calling handler', async () => {
+  const d = dom(); const game = mount(d.win, d.container); await game.begin();
+  let bubbled = 0; d.quit.addEventListener('click', () => bubbled++);
+  d.quitClick(); assert.equal(d.ends(), 0); assert.equal(bubbled, 0);
+  assert.equal(d.timers.size, 0); assert.equal(d.subscriptions.size, 0); game.stop();
+});
+test('navigation while awaiting tuning cancels without acquiring input', async () => {
+  const d = dom(), pending = deferred(); d.win.fetch = () => pending.promise;
+  const game = mount(d.win, d.container); const starting = game.begin();
+  d.win.feedBack.navigate('settings'); pending.resolve({ ok: true, json: async () => ({}) }); await starting;
+  assert.equal(d.nodes.get('.fr-note').textContent, ''); assert.equal(d.timers.size, 0);
+});
+test('complete mounted browser round saves once locally and never submits framework end', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win); let saves = 0, freq = 440;
+  b.win._ndYinDetect = d.win._ndYinDetect = () => ({ freq, confidence: 1 });
+  const records = new Map(); d.win.localStorage = { getItem: k => k === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : records.get(k), setItem: (k, v) => { saves++; records.set(k, v); } };
+  d.win.feedBackMinigames = { end: () => assert.fail('public submission') };
+  const game = mount(d.win, d.container); await game.begin(); let time = 0;
+  const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
+  const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+  const opens = [64, 59, 55, 50, 45, 40];
+  for (let answer = 0; answer < 30; answer++) {
+    for (let i = 0; i < 4; i++) emit(0);
+    const pc = names.indexOf(d.nodes.get('.fr-note').textContent);
+    const string = +d.nodes.get('.fr-string').textContent.match(/String (\d)/)[1] - 1;
+    const midi = opens[string] + ((pc - opens[string]) % 12 + 12) % 12;
+    freq = 440 * 2 ** ((midi - 69) / 12);
+    for (let i = 0; i < 3; i++) emit(.05);
+  }
+  assert.match(d.nodes.get('.fr-progress').textContent, /Completed: 5 passes/);
+  assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 1 }); game.stop(); assert.equal(d.timers.size, 0);
+});
+test('desktop mounted startup waits for explicit input confirmation before capture', async () => {
+  const d = dom(), b = browser(); const native = desktop(b);
+  // Keep the session clock timer separate from capture identity timers.
+  delete b.win.setInterval; delete b.win.clearInterval;
+  Object.assign(d.win, b.win);
+  let captures = 0; const get = d.win.navigator.mediaDevices.getUserMedia;
+  d.win.navigator.mediaDevices.getUserMedia = async constraints => { captures++; return get(constraints); };
+  const game = mount(d.win, d.container); await game.begin();
+  assert.equal(captures, 0); assert.equal(d.nodes.get('.fr-input').hidden, false);
+  assert.match(d.nodes.get('.fr-status').textContent, /USB DI.*Channel 2.*Confirm/);
+  d.nodes.get('.fr-input').onclick();
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  assert.equal(captures, 1); assert.equal(d.nodes.get('.fr-input').hidden, true);
+  game.stop(); assert.equal(d.timers.size, 0); assert.equal(native.intervals.size, 0);
+});
+test('tuning event during deferred desktop identity resolution invalidates stale startup and records', async () => {
+  const d = dom(), b = browser(), pending = deferred(); desktop(b);
+  delete b.win.setInterval; delete b.win.clearInterval; Object.assign(d.win, b.win);
+  let resolving = false, captures = 0, saves = 0;
+  d.win.feedBackDesktop.audio.getCurrentDevice = () => { resolving = true; return pending.promise; };
+  d.win.navigator.mediaDevices.getUserMedia = () => { captures++; assert.fail('Stale tuning must not capture'); };
+  d.win.localStorage.setItem = () => saves++;
+  const game = mount(d.win, d.container); const starting = game.begin();
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  assert.equal(resolving, true);
+  d.win.feedBack.workingTuning.get = () => ({ instrument: 'guitar', stringCount: 6, offsets: [-2, 0, 0, 0, 0, 0], referencePitch: 440 });
+  d.subscriptions.get('working-tuning-changed')({ detail: {} });
+  pending.resolve({ input: 'USB DI', inputType: 'CoreAudio' }); await starting;
+  assert.equal(d.nodes.get('.fr-input').hidden, true); assert.equal(d.nodes.get('.fr-note').textContent, '');
+  assert.equal(d.nodes.get('.fr-pause').disabled, true);
+  assert.match(d.nodes.get('.fr-status').textContent, /tuning changed.*retry/i);
+  d.nodes.get('.fr-input').onclick?.(); d.advance(1000);
+  assert.equal(captures, 0); assert.equal(saves, 0); game.stop();
+});
+test('unannounced tuning changes during identity resolution or before consent are revalidated', async () => {
+  for (const duringResolution of [true, false]) {
+    const d = dom(), b = browser(), pending = deferred(); desktop(b);
+    delete b.win.setInterval; delete b.win.clearInterval; Object.assign(d.win, b.win);
+    if (duringResolution) d.win.feedBackDesktop.audio.getCurrentDevice = () => pending.promise;
+    let captures = 0; d.win.navigator.mediaDevices.getUserMedia = () => { captures++; assert.fail('Stale capture'); };
+    const game = mount(d.win, d.container); const starting = game.begin();
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    d.win.feedBack.workingTuning.get = () => ({ instrument: 'guitar', stringCount: 6, offsets: [-2, 0, 0, 0, 0, 0], referencePitch: 440 });
+    if (duringResolution) pending.resolve({ input: 'USB DI', inputType: 'CoreAudio' });
+    await starting;
+    if (!duringResolution) d.nodes.get('.fr-input').onclick();
+    assert.equal(d.nodes.get('.fr-input').hidden, true); assert.equal(d.nodes.get('.fr-note').textContent, '');
+    assert.match(d.nodes.get('.fr-status').textContent, /setup changed/); assert.equal(captures, 0); game.stop();
+  }
+});

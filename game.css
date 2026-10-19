@@ -1,0 +1,14 @@
+/* SPDX-License-Identifier: MIT */
+.fr-game { box-sizing: border-box; max-width: 900px; margin: auto; padding: 24px; color: #f3f5f8; background: #151923; border: 1px solid #41495b; border-radius: 12px; text-align: center; font: 18px/1.5 system-ui, sans-serif; }
+.fr-game p { margin: 12px 0; }
+.fr-game .fr-note { font-size: clamp(48px, 10vw, 104px); line-height: 1.2; font-weight: 750; min-height: 1.2em; }
+.fr-string { font-size: 24px; }
+.fr-status { color: #bce9ff; min-height: 3em; }
+.fr-setup, .fr-progress, .fr-warning { color: #c6ccda; font-size: 15px; }
+.fr-clock { font-variant-numeric: tabular-nums; }
+.fr-controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin: 24px 0; }
+.fr-game button { font: inherit; padding: 10px 16px; border: 1px solid #7d8da9; border-radius: 6px; color: #fff; background: #293449; cursor: pointer; }
+.fr-game button:hover { background: #3b4c6a; }
+.fr-game button:focus-visible { outline: 3px solid #80d8ff; outline-offset: 3px; }
+.fr-game button:disabled { opacity: .5; cursor: default; }
+.fr-summary { text-align: left; font-variant-numeric: tabular-nums; }
