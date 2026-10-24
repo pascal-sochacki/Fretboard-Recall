@@ -13,6 +13,7 @@
   const LOUD = 0.04;
   const LIVE_EXPIRES_MS = 350;
   const STORAGE_KEY = 'fretboard_recall.records.v1';
+  const RANDOM_RECORD_SUFFIX = ':random';
 
   function snapshotSetup(state, tunings) {
     if (!state || !['guitar', 'bass'].includes(state.instrument)) throw new Error('Unsupported or unavailable instrument. Select guitar or bass in FeedBack.');
@@ -42,12 +43,15 @@
   }
 
   class Round {
-    constructor(setup, random = Math.random) {
+    constructor(setup, random = Math.random, { randomMode = false } = {}) {
       this.setup = setup;
       this.random = random;
+      this.mode = randomMode ? 'random' : 'standard';
       this.pass = 0;
       this.string = 0;
-      this.pitch = choosePitch(null, random);
+      this.pitch = null;
+      if (this.mode === 'random') this.chooseRandomPrompt();
+      else this.pitch = choosePitch(null, random);
       this.answers = [];
       this.elapsed = 0;
       this.promptAt = 0;
@@ -55,6 +59,10 @@
       this.done = false;
       this.lastCaptureTime = null;
       this.resetGate();
+    }
+    chooseRandomPrompt() {
+      this.pitch = Math.floor(this.random() * 12);
+      this.string = Math.floor(this.random() * this.setup.stringCount);
     }
     resetGate() {
       this.armed = false;
@@ -90,6 +98,12 @@
       if (this.correctAt === null) this.correctAt = now;
       if (now - this.correctAt < HOLD_MS) return false;
       this.answers.push({ stringIndex: this.target().index, durationMs: this.elapsed - this.promptAt });
+      if (this.mode === 'random') {
+        if (this.answers.length === 5 * this.setup.stringCount) this.done = true;
+        else this.chooseRandomPrompt();
+        this.resetGate();
+        return true;
+      }
       this.string++;
       if (this.string === this.setup.stringCount) {
         this.string = 0;
@@ -110,20 +124,23 @@
         strings: this.setup.strings.map(s => {
           const answers = this.answers.filter(a => a.stringIndex === s.index);
           const totalMs = answers.reduce((sum, a) => sum + a.durationMs, 0);
-          return { index: s.index, label: s.label, totalMs, averageMs: totalMs / answers.length };
+          return { index: s.index, label: s.label, ...(this.mode === 'random' ? { count: answers.length } : {}), totalMs, averageMs: answers.length ? totalMs / answers.length : null };
         }),
+        ...(this.mode === 'random' ? { mode: this.mode } : {}),
       };
     }
   }
 
-  function storeRecord(storage, setup, result) {
+  function storeRecord(storage, setup, result, mode = 'standard') {
     let records = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
     if (!records || typeof records !== 'object' || Array.isArray(records)) throw new Error('Invalid local records.');
-    const old = records[setup.key];
+    if (!['standard', 'random'].includes(mode)) throw new Error('Invalid round mode.');
+    const key = mode === 'random' ? `${setup.key}${RANDOM_RECORD_SUFFIX}` : setup.key;
+    const old = records[key];
     const valid = old && Number.isInteger(old.completed) && old.completed >= 0 && Number.isFinite(old.bestMs) && old.bestMs >= 0;
-    records[setup.key] = { setup, completed: (valid ? old.completed : 0) + 1, bestMs: valid ? Math.min(old.bestMs, result.totalMs) : result.totalMs, latest: result };
+    records[key] = { setup, ...(mode === 'random' ? { mode } : {}), completed: (valid ? old.completed : 0) + 1, bestMs: valid ? Math.min(old.bestMs, result.totalMs) : result.totalMs, latest: result };
     storage.setItem(STORAGE_KEY, JSON.stringify(records));
-    return records[setup.key];
+    return records[key];
   }
 
   async function resolveDesktopInput(win) {
@@ -266,11 +283,13 @@
   if (root.feedBackMinigames) root.feedBackMinigames.register(spec);
   else (root.__feedBackMinigamesPending = root.__feedBackMinigamesPending || []).push(spec);
 
-  function mount(win, container) {
+  function mount(win, container, random = Math.random) {
     const doc = win.document;
     container.innerHTML = `<section class="fr-game" aria-label="Fretboard Recall">
       <header class="fr-header"><div><p class="fr-eyebrow">One note. Every string.</p><h2>Fretboard Recall</h2></div><span class="fr-badge">5 passes · Local records</span></header>
       <p class="fr-setup">Reading your FeedBack setup…</p>
+      <div class="fr-action-row"><label class="fr-mode"><input type="checkbox" class="fr-random-mode"> Random note + string</label>
+      <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause" disabled>Pause</button><button type="button" class="fr-retry">Start round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div></div>
       <div class="fr-round-progress"><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
       <div class="fr-cards">
         <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
@@ -279,7 +298,6 @@
       <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3><span>Open tuning · no fret hints</span></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
       <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
       <div class="fr-summary"></div>
-      <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause">Pause</button><button type="button" class="fr-retry">Retry / New round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div>
       <p class="fr-warning">Play only the requested string within frets 0–11. Microphone/DI pitch cannot verify the physical string when the same pitch exists elsewhere. Use the requested string yourself. No string detection is claimed.</p>
     </section>`;
     const el = name => container.querySelector(`.fr-${name}`);
@@ -294,6 +312,15 @@
     const host = win.feedBack;
     const quit = doc.getElementById('mg-stage-quit');
     const text = (name, value) => { const node = cached(name); if (node.textContent !== value) node.textContent = value; };
+    function updateControls() {
+      const active = !!round && !round.done && !error;
+      el('random-mode').disabled = active || starting;
+      text('eyebrow', round?.mode === 'random' || (!round && el('random-mode').checked) ? 'Every prompt is independent.' : 'One note. Every string.');
+      text('badge', `${round?.mode === 'random' || (!round && el('random-mode').checked) ? 'Random' : '5 passes'} · Local records`);
+      text('retry', error ? 'Retry' : round?.done ? 'Play again' : starting ? 'Starting…' : round ? 'Restart round' : 'Start round');
+      el('retry').disabled = starting;
+    }
+    el('random-mode').onchange = updateControls;
     function setLive(state, note = '—') {
       if (liveState === state && liveNote === note) return;
       const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet for pitch detection', uncertain: 'Uncertain pitch · play one clear note', detected: 'Pitch detected · reported octave', paused: 'Paused · input display cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio · last pitch cleared' };
@@ -310,6 +337,7 @@
       resetLive('failed');
       el('input').hidden = true;
       round?.pause(true);
+      updateControls();
       text('status', `${e.message || e} No record saved. Check host settings, then Retry.`);
       el('pause').disabled = true;
     };
@@ -347,17 +375,25 @@
     }
     function renderProgress() {
       cached('completion').value = round.answers.length;
+      cached('passes').hidden = round.mode === 'random';
+      cached('passes').setAttribute('aria-hidden', String(round.mode === 'random'));
       passSteps.forEach((step, i) => {
         const state = round.done || i < round.pass ? 'complete' : i === round.pass ? 'current' : 'upcoming';
         step.setAttribute('data-state', state);
         step.setAttribute('aria-label', `Pass ${i + 1}: ${state}`);
       });
+      const answersByString = new Map();
+      for (const answer of round.answers) answersByString.set(answer.stringIndex, (answersByString.get(answer.stringIndex) || 0) + 1);
       stringRows.forEach(({ row, instruction }, i) => {
         const position = setup.stringCount - 1 - i;
-        const state = round.done ? 'complete' : position < round.string ? 'complete' : position === round.string ? 'current' : 'upcoming';
+        const stringIndex = position;
+        const sampled = answersByString.get(stringIndex) || 0;
+        const isCurrent = round.target().index === stringIndex;
+        const state = round.done ? 'complete' : isCurrent ? 'current' : round.mode === 'random' ? sampled ? 'sampled' : 'upcoming' : position < round.string ? 'complete' : 'upcoming';
         row.setAttribute('data-state', state);
         if (state === 'current') row.setAttribute('aria-current', 'step'); else row.removeAttribute('aria-current');
-        instruction.textContent = state === 'current' ? 'Play this string' : state === 'complete' ? 'Done' : 'Up next';
+        instruction.textContent = state === 'current' ? 'Play this string' : round.mode === 'random' ? sampled ? `Answered ${sampled}` : 'Not selected yet' : state === 'complete' ? 'Done' : 'Up next';
+        row.setAttribute('aria-label', round.mode === 'random' ? `${setup.strings.find(s => s.index === stringIndex).label} · ${sampled} accepted answers${isCurrent ? ' · requested now' : ''}` : setup.strings.find(s => s.index === stringIndex).label);
       });
     }
     function renderPrompt() {
@@ -365,9 +401,12 @@
       text('note', noteName(target.pitch));
       const number = setup.stringCount - target.index;
       text('string', `String ${number}${number === 1 ? ' · highest-side' : number === setup.stringCount ? ' · lowest-side' : ''}`);
-      text('progress', `Pass ${round.pass + 1} / 5 · Step ${round.string + 1} / ${setup.stringCount} · ${round.answers.length} / ${5 * setup.stringCount} accepted`);
+      text('progress', round.mode === 'random'
+        ? `Random prompts · ${round.answers.length} / ${5 * setup.stringCount} accepted · current string ${number}`
+        : `Pass ${round.pass + 1} / 5 · Step ${round.string + 1} / ${setup.stringCount} · ${round.answers.length} / ${5 * setup.stringCount} accepted`);
       renderProgress();
       text('status', 'Mute all strings briefly; then pluck the requested string.');
+      text('hint', round.mode === 'random' ? 'Find this note on the requested string. Pitch and string are independently randomized; repeats are possible.' : 'Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.');
       // Start timing after assigning the prompt, never after the mute gate.
       round.displayed();
     }
@@ -386,19 +425,22 @@
       resetLive('complete');
       el('pause').disabled = true;
       const result = round.summary();
-      text('note', ''); text('string', ''); text('progress', `Completed: 5 passes · ${round.answers.length} accepted`);
+      text('note', ''); text('string', ''); text('progress', round.mode === 'random' ? `Random round complete · ${round.answers.length} accepted` : `Completed: 5 passes · ${round.answers.length} accepted`);
       renderProgress();
       text('clock', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
       const summary = el('summary'); summary.replaceChildren();
       for (const s of result.strings) {
         const p = doc.createElement('p');
-        p.textContent = `${s.label}: total ${seconds(s.totalMs)} · average ${seconds(s.averageMs)}`;
+        p.textContent = round.mode === 'random'
+          ? s.count === 0 ? `${s.label}: no answers this round` : `${s.label}: ${s.count} answers · total ${seconds(s.totalMs)} · average ${seconds(s.averageMs)}`
+          : `${s.label}: total ${seconds(s.totalMs)} · average ${seconds(s.averageMs)}`;
         summary.appendChild(p);
       }
       try {
-        const record = storeRecord(win.localStorage, setup, result);
+        const record = storeRecord(win.localStorage, setup, result, round.mode);
         text('status', `Saved only on this browser/device. ${record.completed} completed rounds for this exact setup · Personal best ${seconds(record.bestMs)}. No XP or public submission.`);
       } catch (_) { text('status', 'Round completed, but local records could not be saved (storage unavailable or corrupted). No public submission.'); }
+      updateControls();
     }
     function sample(value) {
       updateClock();
@@ -436,12 +478,11 @@
       } catch (e) { if (!cancelled()) fail(e); }
     }
     async function begin() {
-      release(); error = false; round = null;
+      release(); error = false; round = null; starting = true; updateControls();
       resetLive('startup');
       setup = null; stringRows = []; passSteps = [];
       cached('strings').replaceChildren(); cached('passes').replaceChildren(); cached('completion').value = 0;
       text('setup', 'Reading your FeedBack setup…');
-      starting = true;
       desktopInput = null; el('input').hidden = true;
       text('status', 'Reading current FeedBack instrument and tuning…');
       text('note', ''); text('string', ''); text('clock', ''); text('progress', '');
@@ -473,19 +514,21 @@
               if (snapshotSetup(host.workingTuning.get(), tunings).key !== setup.key) throw new Error('Host setup changed before input confirmation. Retry.');
             } catch (e) { fail(e); return; }
             el('input').hidden = true;
-            round = new Round(setup); lastClock = win.performance.now();
+            round = new Round(setup, random, { randomMode: el('random-mode').checked }); lastClock = win.performance.now();
+            updateControls();
             renderPrompt(); el('pause').disabled = false; text('pause', 'Pause');
             acquire();
           };
           return;
         }
-        round = new Round(setup); lastClock = win.performance.now();
+        round = new Round(setup, random, { randomMode: el('random-mode').checked }); lastClock = win.performance.now();
+        updateControls();
         renderPrompt(); el('pause').disabled = false; text('pause', 'Pause');
         await acquire();
       } catch (e) { if (alive && gen === generation) fail(e); }
-      finally { if (gen === generation) starting = false; }
+      finally { if (gen === generation) { starting = false; updateControls(); } }
     }
-    el('retry').onclick = () => { if (!acquiring) begin(); };
+    el('retry').onclick = () => { if (!starting) begin(); };
     el('pause').onclick = () => {
       if (!round || round.done || error) return;
       updateClock();

@@ -223,6 +223,42 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
   assert.deepEqual(b.counts(), { stopped: 1, closed: 1 }); game.stop(); assert.equal(d.timers.size, 0);
 });
+test('random mode UI stays selectable only between rounds, reports actual prompts, and saves separate records', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  let time = 0;
+  d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((48 - 69) / 12), confidence: 1 });
+  const records = new Map();
+  d.win.localStorage = { getItem: key => key === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : records.get(key), setItem: (key, value) => records.set(key, value) };
+  const game = mount(d.win, d.container, () => .01);
+  d.nodes.get('.fr-random-mode').checked = true;
+  d.nodes.get('.fr-random-mode').onchange();
+  await game.begin();
+  const get = name => d.nodes.get(`.fr-${name}`);
+  assert.equal(get('badge').textContent, 'Random · Local records');
+  assert.equal(get('random-mode').disabled, true);
+  assert.equal(get('passes').hidden, true);
+  assert.match(get('progress').textContent, /^Random prompts · 0 \/ 30 accepted · current string 6$/);
+  assert.equal(get('string').textContent, 'String 6 · lowest-side');
+  const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
+  for (let answer = 0; answer < 30; answer++) {
+    assert.equal(get('note').textContent, 'C');
+    assert.equal(get('string').textContent, 'String 6 · lowest-side');
+    for (let i = 0; i < 4; i++) emit(0);
+    for (let i = 0; i < 3; i++) emit(.05);
+  }
+  assert.match(get('progress').textContent, /^Random round complete · 30 accepted$/);
+  assert.equal(get('retry').textContent, 'Play again');
+  assert.equal(get('random-mode').disabled, false);
+  assert.match(get('summary').children[5].textContent, /30 answers/);
+  assert.match(get('summary').children[0].textContent, /no answers this round/);
+  assert.equal(JSON.parse(records.get('fretboard_recall.records.v1')).hasOwnProperty(`${setup.key}:random`), true);
+  assert.ok(d.container.innerHTML.indexOf('fr-action-row') < d.container.innerHTML.indexOf('fr-strings-panel'));
+  get('random-mode').checked = false;
+  await game.begin();
+  assert.match(get('progress').textContent, /^Pass 1 \/ 5/);
+  assert.equal(get('passes').hidden, false);
+  game.stop();
+});
 test('desktop mounted startup waits for explicit input confirmation before capture', async () => {
   const d = dom(), b = browser(); const native = desktop(b);
   // Keep the session clock timer separate from capture identity timers.

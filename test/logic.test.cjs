@@ -144,6 +144,35 @@ test('five passes retain pitch within each pass, immediate next prompt and rearm
   assert.equal(summary.totalMs, r.elapsed); assert.equal(summary.averageMs, summary.totalMs / 30);
   for (const s of summary.strings) assert.equal(s.averageMs, s.totalMs / 5);
 });
+test('random mode independently selects repeatable pitch classes and physical strings for five times string count', () => {
+  const s = setup();
+  let choice = 0;
+  const r = new Round(s, () => {
+    const call = choice++, prompt = Math.floor(call / 2);
+    return call % 2 ? (prompt === 0 ? .01 : .99) : ([.01, .99, .01][prompt] ?? .5);
+  }, { randomMode: true });
+  assert.equal(r.mode, 'random');
+  assert.equal(r.pitch, 0); assert.equal(r.target().index, 0);
+  let time = 0;
+  for (let answer = 0; answer < 5 * s.stringCount; answer++) {
+    if (answer === 0) { assert.equal(r.pitch, 0); assert.equal(r.target().index, 0); }
+    if (answer === 1) { assert.equal(r.pitch, 11); assert.equal(r.target().index, 5); }
+    if (answer === 2) { assert.equal(r.pitch, 0); assert.equal(r.target().index, 5); }
+    const target = r.target();
+    const open = s.strings.find(item => item.index === target.index).midi;
+    assert.equal(target.midi, open + ((target.pitch - open) % 12 + 12) % 12);
+    time = accept(r, time) + 20;
+    if (!r.done) r.displayed();
+  }
+  assert.equal(r.done, true); assert.equal(r.answers.length, 30);
+  assert.equal(r.answers[0].stringIndex, 0);
+  assert.ok(r.answers.slice(1).every(answer => answer.stringIndex === 5));
+  const result = r.summary();
+  assert.equal(result.mode, 'random');
+  assert.deepEqual(result.strings.map(item => item.count), [29, 0, 0, 0, 0, 1]);
+  assert.equal(result.strings[1].averageMs, null);
+  assert.ok(result.strings.slice(1, 5).every(item => item.totalMs === 0 && item.averageMs === null));
+});
 test('pause excludes time and clears silence/hit state without skipping', () => {
   const r = new Round(setup()); r.tick(100); r.sample({ level: 0 }, 100);
   r.pause(true); r.tick(5000); assert.equal(r.elapsed, 100);
@@ -158,6 +187,13 @@ test('local records save only supplied completed summaries grouped by exact setu
   assert.equal(storeRecord(storage, a, { totalMs: 300 }).bestMs, 200);
   assert.equal(storeRecord(storage, a, { totalMs: 100 }).bestMs, 100);
   assert.equal(storeRecord(storage, b, { totalMs: 500 }).completed, 1);
+  assert.equal(storeRecord(storage, a, { totalMs: 700 }, 'random').completed, 1);
+  assert.equal(storeRecord(storage, a, { totalMs: 600 }, 'random').bestMs, 600);
+  assert.equal(storeRecord(storage, a, { totalMs: 150 }).completed, 4);
+  const stored = JSON.parse(map.values().next().value);
+  assert.equal(stored[`${a.key}:random`].completed, 2);
+  assert.equal(stored[a.key].completed, 4);
+  assert.equal(Object.hasOwn(stored[a.key], 'mode'), false);
   assert.throws(() => storeRecord({ getItem: () => '{' }, a, { totalMs: 1 }));
 });
 test('RMS meters raw signal without DSP or held pitch as a silence proxy', () => {
