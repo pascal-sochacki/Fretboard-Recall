@@ -27,6 +27,7 @@
 .fr-game .fr-target .fr-eyebrow { color: #c3f6e0; }
 .fr-game .fr-note { margin: 12px 0; color: #d4ffe9; font-size: clamp(42px, 6vw, 72px); line-height: 1.1; min-height: 1.1em; font-weight: 800; letter-spacing: -.045em; overflow-wrap: anywhere; }
 .fr-game .fr-string { font-size: clamp(18px, 2.5vw, 24px); font-weight: 650; min-height: 1.5em; }
+.fr-game .fr-audio-status { color: var(--fr-muted); font-size: 12px; min-height: 1.5em; margin-top: 8px; }
 .fr-game .fr-detected { margin: 16px 0 12px; font-size: clamp(32px, 4.5vw, 54px); line-height: 1.2; font-weight: 750; min-height: 1.2em; overflow-wrap: anywhere; }
 .fr-game .fr-live-status { color: #ccdcf5; font-size: 14px; min-height: 1.5em; }
 .fr-game .fr-live[data-state="uncertain"] .fr-live-status, .fr-game .fr-live[data-state="failed"] .fr-live-status { color: #ffdc9c; }
@@ -36,13 +37,12 @@
 .fr-game h3 { font-size: 16px; font-weight: 650; color: var(--fr-ink); }
 .fr-game .fr-diagram-heading span, .fr-game .fr-side { color: var(--fr-muted); font-size: 12px; }
 .fr-game .fr-strings { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; }
-.fr-game .fr-string-row { display: grid; grid-template-columns: 28px minmax(24px, 1fr) minmax(90px, auto) 110px; gap: 12px; align-items: center; min-height: 42px; padding: 6px 12px; border: 1px solid transparent; border-radius: 9px; color: var(--fr-muted); }
+.fr-game .fr-string-row { display: grid; grid-template-columns: 28px minmax(24px, 1fr) 110px; gap: 12px; align-items: center; min-height: 42px; padding: 6px 12px; border: 1px solid transparent; border-radius: 9px; color: var(--fr-muted); }
 .fr-game .fr-string-row[data-state="current"] { border-color: var(--fr-accent); background: #234339; color: #e4fff2; }
 .fr-game .fr-string-row[data-state="sampled"] { color: #d4e7ff; }
 .fr-game .fr-string-number { font-weight: 750; text-align: center; }
 .fr-game .fr-wire { height: var(--fr-wire-width, 2px); background: #697c91; border-radius: 4px; }
 .fr-game .fr-string-row[data-state="current"] .fr-wire { background: var(--fr-accent); }
-.fr-game .fr-open-note { font-weight: 650; font-variant-numeric: tabular-nums; }
 .fr-game .fr-string-instruction { text-align: right; font-size: 12px; }
 .fr-game .fr-feedback { margin-top: 20px; padding: 16px 18px; border-left: 3px solid #99caff; border-radius: 0 12px 12px 0; background: #1c2c40; }
 .fr-game .fr-status { color: #d4e7ff; min-height: 1.5em; overflow-wrap: anywhere; }

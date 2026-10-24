@@ -2,9 +2,17 @@
 (function (root) {
   'use strict';
 
-  const NAMES = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+  const NATURAL_NAMES = ['C', null, 'D', null, 'E', 'F', null, 'G', null, 'A', null, 'B'];
+  const ACCIDENTAL_NAMES = {
+    1: ['C♯', 'D♭'], 3: ['D♯', 'E♭'], 6: ['F♯', 'G♭'],
+    8: ['G♯', 'A♭'], 10: ['A♯', 'B♭'],
+  };
   const mod = n => ((n % 12) + 12) % 12;
-  const noteName = midi => NAMES[mod(midi)];
+  const noteName = (midi, random = Math.random) => {
+    const pitch = mod(midi);
+    if (NATURAL_NAMES[pitch]) return NATURAL_NAMES[pitch];
+    return ACCIDENTAL_NAMES[pitch][random() < 0.5 ? 0 : 1];
+  };
   const seconds = ms => `${(ms / 1000).toFixed(2)} s`;
   const SILENCE_MS = 180;
   const HOLD_MS = 120;
@@ -14,8 +22,9 @@
   const LIVE_EXPIRES_MS = 350;
   const STORAGE_KEY = 'fretboard_recall.records.v1';
   const RANDOM_RECORD_SUFFIX = ':random';
+  const midiFrequency = (midi, referencePitch) => referencePitch * 2 ** ((midi - 69) / 12);
 
-  function snapshotSetup(state, tunings) {
+  function snapshotSetup(state, tunings, random = Math.random) {
     if (!state || !['guitar', 'bass'].includes(state.instrument)) throw new Error('Unsupported or unavailable instrument. Select guitar or bass in FeedBack.');
     const supported = state.instrument === 'guitar' ? [6, 7, 8] : [4, 5, 6];
     if (!supported.includes(state.stringCount)) throw new Error('Unsupported string count.');
@@ -30,7 +39,7 @@
     if (!opens.every(m => m >= 0 && m + 11 <= 127)) throw new Error('Tuning exceeds the supported pitch range.');
     const strings = opens.map((midi, index) => ({
       index, midi,
-      label: `String ${state.stringCount - index} · ${noteName(midi)}${Math.floor(midi / 12) - 1}${index === 0 ? ' · lowest-side' : index === opens.length - 1 ? ' · highest-side' : ''}`,
+      label: `String ${state.stringCount - index} · ${noteName(midi, random)}${Math.floor(midi / 12) - 1}${index === 0 ? ' · lowest-side' : index === opens.length - 1 ? ' · highest-side' : ''}`,
     })).reverse();
     const setup = { instrument: state.instrument, stringCount: state.stringCount, offsets: state.offsets.slice(), referencePitch: state.referencePitch, strings };
     setup.key = JSON.stringify([setup.instrument, setup.stringCount, setup.offsets, setup.referencePitch, strings.map(s => [s.index, s.midi])]);
@@ -49,9 +58,10 @@
       this.mode = randomMode ? 'random' : 'standard';
       this.pass = 0;
       this.string = 0;
-      this.pitch = null;
+      this.liveSpellings = new Map();
       if (this.mode === 'random') this.chooseRandomPrompt();
       else this.pitch = choosePitch(null, random);
+      this.updatePromptSpelling();
       this.answers = [];
       this.elapsed = 0;
       this.promptAt = 0;
@@ -74,6 +84,14 @@
       // Keep the canonical setup/record mapping high-side first; practice starts on the low physical side.
       const s = this.setup.strings[this.setup.stringCount - 1 - this.string];
       return { ...s, pitch: this.pitch, midi: s.midi + mod(this.pitch - s.midi) };
+    }
+    updatePromptSpelling() {
+      this.promptSpelling = noteName(this.pitch, this.random);
+    }
+    detectedName(midi) {
+      const pitch = mod(midi);
+      if (!this.liveSpellings.has(pitch)) this.liveSpellings.set(pitch, noteName(pitch, this.random));
+      return this.liveSpellings.get(pitch);
     }
     tick(dt) { if (!this.paused && !this.done) this.elapsed += dt; }
     pause(value) { this.paused = value; this.resetGate(); }
@@ -100,17 +118,19 @@
       this.answers.push({ stringIndex: this.target().index, durationMs: this.elapsed - this.promptAt });
       if (this.mode === 'random') {
         if (this.answers.length === 5 * this.setup.stringCount) this.done = true;
-        else this.chooseRandomPrompt();
+        else { this.chooseRandomPrompt(); this.updatePromptSpelling(); }
         this.resetGate();
         return true;
       }
       this.string++;
+      let newPitch = false;
       if (this.string === this.setup.stringCount) {
         this.string = 0;
         this.pass++;
         if (this.pass === 5) this.done = true;
-        else this.pitch = choosePitch(this.pitch, this.random);
+        else { this.pitch = choosePitch(this.pitch, this.random); newPitch = true; }
       }
+      if (newPitch) this.updatePromptSpelling();
       this.resetGate();
       return true;
     }
@@ -267,7 +287,7 @@
     return Math.min(1, Math.sqrt(sum / samples.length) * 5);
   }
 
-  const logic = { Round, snapshotSetup, choosePitch, noteName, storeRecord, scaledRms, resolveDesktopInput, openBrowser, mount };
+  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, storeRecord, scaledRms, resolveDesktopInput, openBrowser, mount };
   if (typeof module !== 'undefined' && module.exports) { module.exports = logic; return; }
   if (root.__fretboardRecallLoaded) return;
   root.__fretboardRecallLoaded = true;
@@ -292,10 +312,10 @@
       <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause" disabled>Pause</button><button type="button" class="fr-retry">Start round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div></div>
       <div class="fr-round-progress"><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
       <div class="fr-cards">
-        <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
+        <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
         <section class="fr-live" aria-label="Live detected note"><p class="fr-eyebrow">Live input · detected note</p><p class="fr-detected">—</p><p class="fr-live-status">Not listening</p><p class="fr-hint">Reported pitch and octave only. Physical string is not detected.</p></section>
       </div>
-      <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3><span>Open tuning · no fret hints</span></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
+       <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
       <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
       <div class="fr-summary"></div>
       <p class="fr-warning">Play only the requested string within frets 0–11. Microphone/DI pitch cannot verify the physical string when the same pitch exists elsewhere. Use the requested string yourself. No string detection is claimed.</p>
@@ -304,6 +324,7 @@
     const elements = new Map();
     const cached = name => { if (!elements.has(name)) elements.set(name, el(name)); return elements.get(name); };
     let generation = 0, adapter = null, round = null, setup = null, alive = true;
+    let referenceContext = null, referenceTone = null, referenceUnlock = null, referenceAttempt = 0, promptAudioGeneration = 0;
     let clockTimer = null, lastClock = win.performance.now(), lastInput = lastClock;
     let error = false, acquiring = false, starting = false;
     let desktopInput = null;
@@ -312,9 +333,75 @@
     const host = win.feedBack;
     const quit = doc.getElementById('mg-stage-quit');
     const text = (name, value) => { const node = cached(name); if (node.textContent !== value) node.textContent = value; };
+    function stopReferenceTone() {
+      const tone = referenceTone;
+      referenceTone = null;
+      if (!tone) return;
+      try { tone.oscillator.stop(); } catch (_) {}
+      try { tone.oscillator.disconnect(); } catch (_) {}
+      try { tone.gain.disconnect(); } catch (_) {}
+    }
+    function closeReferenceAudio() {
+      stopReferenceTone();
+      const context = referenceContext;
+      referenceContext = null; referenceUnlock = null;
+      if (context) { try { Promise.resolve(context.close()).catch(() => {}); } catch (_) {} }
+    }
+    function wakeReferenceAudio() {
+      try {
+        const AudioContext = win.AudioContext || win.webkitAudioContext;
+        if (!AudioContext) return Promise.resolve(false);
+        if (!referenceContext) referenceContext = new AudioContext();
+        const context = referenceContext;
+        if (context.state === 'running') return Promise.resolve(true);
+        return Promise.resolve(context.resume()).then(() => context === referenceContext && context.state === 'running', () => false);
+      } catch (_) { return Promise.resolve(false); }
+    }
+    async function playReferenceTone(manual = false) {
+      const promptGeneration = promptAudioGeneration;
+      const attempt = ++referenceAttempt;
+      const target = round?.target();
+      if (!target || !setup || round.paused || round.done || error || !alive) return;
+      stopReferenceTone();
+      const unlock = manual ? wakeReferenceAudio() : referenceUnlock || wakeReferenceAudio();
+      if (!manual) referenceUnlock = null;
+      const running = await unlock;
+      if (!alive || attempt !== referenceAttempt || promptGeneration !== promptAudioGeneration || !round || round.paused || round.done || !running) {
+        if (alive && attempt === referenceAttempt && promptGeneration === promptAudioGeneration && !running) text('audio-status', 'Reference tone was blocked or unavailable. Select Hear note to try again.');
+        return;
+      }
+      const context = referenceContext;
+      let oscillator, gain;
+      try {
+        oscillator = context.createOscillator(); gain = context.createGain();
+        const now = context.currentTime;
+        oscillator.type = 'sine';
+        oscillator.frequency.setValueAtTime(midiFrequency(target.midi, setup.referencePitch), now);
+        gain.gain.setValueAtTime(0, now);
+        gain.gain.linearRampToValueAtTime(0.12, now + 0.015);
+        gain.gain.linearRampToValueAtTime(0, now + 0.36);
+        oscillator.connect(gain); gain.connect(context.destination);
+        referenceTone = { oscillator, gain };
+        oscillator.onended = () => {
+          if (referenceTone?.oscillator !== oscillator) return;
+          referenceTone = null;
+          try { oscillator.disconnect(); } catch (_) {}
+          try { gain.disconnect(); } catch (_) {}
+        };
+        oscillator.start(now); oscillator.stop(now + 0.37);
+        text('audio-status', '');
+      } catch (_) {
+        if (oscillator) { try { oscillator.disconnect(); } catch (_) {} }
+        if (gain) { try { gain.disconnect(); } catch (_) {} }
+        referenceTone = null;
+        text('audio-status', 'Reference tone is unavailable. The round can continue; select Hear note to try again.');
+      }
+    }
     function updateControls() {
       const active = !!round && !round.done && !error;
       el('random-mode').disabled = active || starting;
+      el('hear').disabled = !active || round.paused;
+      el('hear').hidden = !round || round.done;
       text('eyebrow', round?.mode === 'random' || (!round && el('random-mode').checked) ? 'Every prompt is independent.' : 'One note. Every string.');
       text('badge', `${round?.mode === 'random' || (!round && el('random-mode').checked) ? 'Random' : '5 passes'} · Local records`);
       text('retry', error ? 'Retry' : round?.done ? 'Play again' : starting ? 'Starting…' : round ? 'Restart round' : 'Start round');
@@ -329,7 +416,7 @@
       text('detected', note); text('live-status', labels[state]);
     }
     function resetLive(state) { liveAt = null; setLive(state); }
-    const release = () => { generation++; adapter?.stop(); adapter = null; acquiring = false; starting = false; resetLive('stopped'); };
+    const release = () => { generation++; referenceAttempt++; promptAudioGeneration++; closeReferenceAudio(); adapter?.stop(); adapter = null; acquiring = false; starting = false; resetLive('stopped'); };
     const fail = e => {
       if (!alive || error) return;
       error = true;
@@ -360,10 +447,9 @@
         row.className = 'fr-string-row';
         const number = doc.createElement('span'); number.className = 'fr-string-number'; number.textContent = `${setup.stringCount - s.index}`;
         const wire = doc.createElement('span'); wire.className = 'fr-wire'; wire.setAttribute('aria-hidden', 'true'); wire.style.setProperty('--fr-wire-width', `${1 + (setup.stringCount - s.index - 1) * 0.45}px`);
-        const open = doc.createElement('span'); open.className = 'fr-open-note'; open.textContent = `${noteName(s.midi)}${Math.floor(s.midi / 12) - 1}`;
         const instruction = doc.createElement('span'); instruction.className = 'fr-string-instruction';
-        row.setAttribute('aria-label', s.label);
-        row.appendChild(number); row.appendChild(wire); row.appendChild(open); row.appendChild(instruction);
+        row.setAttribute('aria-label', `String ${setup.stringCount - s.index}`);
+        row.appendChild(number); row.appendChild(wire); row.appendChild(instruction);
         return { row, instruction };
       });
       cached('strings').replaceChildren(...stringRows.map(s => s.row));
@@ -393,12 +479,12 @@
         row.setAttribute('data-state', state);
         if (state === 'current') row.setAttribute('aria-current', 'step'); else row.removeAttribute('aria-current');
         instruction.textContent = state === 'current' ? 'Play this string' : round.mode === 'random' ? sampled ? `Answered ${sampled}` : 'Not selected yet' : state === 'complete' ? 'Done' : 'Up next';
-        row.setAttribute('aria-label', round.mode === 'random' ? `${setup.strings.find(s => s.index === stringIndex).label} · ${sampled} accepted answers${isCurrent ? ' · requested now' : ''}` : setup.strings.find(s => s.index === stringIndex).label);
+        row.setAttribute('aria-label', round.mode === 'random' ? `String ${setup.stringCount - stringIndex} · ${sampled} accepted answers${isCurrent ? ' · requested now' : ''}` : `String ${setup.stringCount - stringIndex}`);
       });
     }
     function renderPrompt() {
       const target = round.target();
-      text('note', noteName(target.pitch));
+      text('note', round.promptSpelling);
       const number = setup.stringCount - target.index;
       text('string', `String ${number}${number === 1 ? ' · highest-side' : number === setup.stringCount ? ' · lowest-side' : ''}`);
       text('progress', round.mode === 'random'
@@ -409,6 +495,8 @@
       text('hint', round.mode === 'random' ? 'Find this note on the requested string. Pitch and string are independently randomized; repeats are possible.' : 'Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.');
       // Start timing after assigning the prompt, never after the mute gate.
       round.displayed();
+      promptAudioGeneration++;
+      playReferenceTone();
     }
     function updateClock() {
       const now = win.performance.now();
@@ -456,7 +544,7 @@
       else if (!Number.isFinite(value.midi) || !(value.confidence >= 0.7)) setLive('uncertain');
       else {
         const midi = Math.round(value.midi);
-        setLive('detected', `${noteName(midi)}${Math.floor(midi / 12) - 1}`);
+        setLive('detected', `${round.detectedName(midi)}${Math.floor(midi / 12) - 1}`);
       }
       if (round.sample(value, lastInput)) {
         if (round.done) finish(); else renderPrompt();
@@ -479,6 +567,8 @@
     }
     async function begin() {
       release(); error = false; round = null; starting = true; updateControls();
+      referenceUnlock = wakeReferenceAudio();
+      text('audio-status', '');
       resetLive('startup');
       setup = null; stringRows = []; passSteps = [];
       cached('strings').replaceChildren(); cached('passes').replaceChildren(); cached('completion').value = 0;
@@ -497,7 +587,7 @@
         if (!alive || gen !== generation) return;
         const after = host.workingTuning.get();
         if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error('Host setup changed during startup. Retry.');
-        setup = snapshotSetup(after, tunings);
+        setup = snapshotSetup(after, tunings, random);
         renderSetup();
         text('setup', `${setup.instrument} · ${setup.stringCount} strings · A4 ${setup.referencePitch} Hz · ${after.provenance === 'verified' ? 'host tuning marked verified' : 'host tuning assumed, not physically verified'}`);
         if (win.feedBackDesktop?.isDesktop) {
@@ -510,6 +600,7 @@
           text('input', `Use Electron capture: ${input.label}`); el('input').hidden = false;
           el('input').onclick = () => {
             if (!alive || gen !== generation) return;
+            referenceUnlock = wakeReferenceAudio();
             try {
               if (snapshotSetup(host.workingTuning.get(), tunings).key !== setup.key) throw new Error('Host setup changed before input confirmation. Retry.');
             } catch (e) { fail(e); return; }
@@ -529,10 +620,13 @@
       finally { if (gen === generation) { starting = false; updateControls(); } }
     }
     el('retry').onclick = () => { if (!starting) begin(); };
+    el('hear').onclick = () => { playReferenceTone(true); };
     el('pause').onclick = () => {
       if (!round || round.done || error) return;
       updateClock();
       round.pause(!round.paused);
+      if (round.paused) { referenceAttempt++; stopReferenceTone(); }
+      updateControls();
       resetLive(round.paused ? 'paused' : 'listening');
       text('pause', round.paused ? 'Resume' : 'Pause');
       text('status', round.paused ? 'Paused. Resume, mute, then pluck; paused time is excluded.' : 'Mute all strings briefly; then pluck the requested string.');

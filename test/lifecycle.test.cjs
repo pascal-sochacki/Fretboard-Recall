@@ -9,14 +9,16 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 function browser() {
   const nodes = [], calls = [], errors = [], samples = [];
   let stopped = 0, closed = 0, frameSize;
-  const node = () => { const n = { gain: { value: 1 }, connect() {}, disconnect() { this.disconnected = true; } }; nodes.push(n); return n; };
+  const tones = [], contexts = [];
+  const node = () => { const n = { gain: { value: 1, setValueAtTime(value) { this.value = value; }, linearRampToValueAtTime(value) { this.value = value; } }, connect() {}, disconnect() { this.disconnected = true; } }; nodes.push(n); return n; };
   const track = { label: 'USB DI', readyState: 'live', muted: false, stop: () => stopped++, getSettings: () => ({ channelCount: 2, deviceId: 'chosen' }) };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };
   class Context {
-    constructor() { this.state = 'running'; this.sampleRate = 48000; }
+    constructor() { this.state = 'running'; this.sampleRate = 48000; this.currentTime = 0; this.destination = {}; contexts.push(this); }
     async resume() {} async close() { closed++; }
     createMediaStreamSource() { return node(); } createGain() { return node(); }
     createChannelSplitter() { return node(); }
+    createOscillator() { const oscillator = { frequency: { setValueAtTime(value) { oscillator.hz = value; } }, connect(target) { oscillator.output = target; }, disconnect() { oscillator.disconnected = true; }, start(time) { oscillator.startedAt = time; }, stop(time) { oscillator.stoppedAt = time; oscillator.stopCount = (oscillator.stopCount || 0) + 1; } }; tones.push(oscillator); return oscillator; }
     createScriptProcessor(size) { frameSize = size; const n = node(); n.meter = true; return n; }
   }
   const win = {
@@ -26,7 +28,7 @@ function browser() {
     _ndYinDetect: (frame, rate, minHz) => { calls.push({ frame, rate, minHz }); return { freq: 440, confidence: .95 }; },
     createNoteDetector: () => assert.fail('Async detector must never be constructed'),
   };
-  return { win, nodes, calls, errors, samples, track, stream, frame: value => new Float32Array(frameSize).fill(value), emit: (frame, time) => nodes.find(n => n.meter).onaudioprocess?.({ playbackTime: time, inputBuffer: { getChannelData: () => frame } }), counts: () => ({ stopped, closed }) };
+  return { win, nodes, calls, errors, samples, tones, contexts, track, stream, frame: value => new Float32Array(frameSize).fill(value), emit: (frame, time) => nodes.find(n => n.meter).onaudioprocess?.({ playbackTime: time, inputBuffer: { getChannelData: () => frame } }), counts: () => ({ stopped, closed }) };
 }
 
 test('safe pending and immediate registration matches manifest once', () => {
@@ -193,11 +195,11 @@ test('complete mounted browser round saves once locally and never submits framew
   b.win._ndYinDetect = d.win._ndYinDetect = () => ({ freq, confidence: 1 });
   const records = new Map(); d.win.localStorage = { getItem: k => k === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : records.get(k), setItem: (k, v) => { saves++; records.set(k, v); } };
   d.win.feedBackMinigames = { end: () => assert.fail('public submission') };
-  const game = mount(d.win, d.container); await game.begin(); let time = 0;
+  const game = mount(d.win, d.container, () => 0); await game.begin(); let time = 0;
   assert.equal(d.nodes.get('.fr-string').textContent, 'String 6 · lowest-side');
   assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
-  const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
   const opens = [64, 59, 55, 50, 45, 40];
   for (let answer = 0; answer < 30; answer++) {
     for (let i = 0; i < 4; i++) emit(0);
@@ -221,7 +223,11 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(d.nodes.get('.fr-completion').value, 30);
   assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
-  assert.deepEqual(b.counts(), { stopped: 1, closed: 1 }); game.stop(); assert.equal(d.timers.size, 0);
+  assert.equal(d.nodes.get('.fr-retry').textContent, 'Play again');
+  d.nodes.get('.fr-retry').onclick();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 2 }); game.stop(); assert.equal(d.timers.size, 0);
 });
 test('random mode UI stays selectable only between rounds, reports actual prompts, and saves separate records', async () => {
   const d = dom(), b = browser(); Object.assign(d.win, b.win);
@@ -254,11 +260,61 @@ test('random mode UI stays selectable only between rounds, reports actual prompt
   assert.equal(JSON.parse(records.get('fretboard_recall.records.v1')).hasOwnProperty(`${setup.key}:random`), true);
   assert.ok(d.container.innerHTML.indexOf('fr-action-row') < d.container.innerHTML.indexOf('fr-strings-panel'));
   get('random-mode').checked = false;
-  await game.begin();
+  get('retry').onclick();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.match(get('progress').textContent, /^Pass 1 \/ 5/);
   assert.equal(get('passes').hidden, false);
+});
+
+test('requested-string diagram hides open pitches and play again starts a fresh round', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  const game = mount(d.win, d.container, () => 0); await game.begin();
+  assert.equal(d.nodes.get('.fr-retry').textContent, 'Starting…');
+  assert.doesNotMatch(d.container.innerHTML, /Open tuning|no fret hints|fr-open-note/);
+  assert.equal(d.nodes.get('.fr-strings').children[0].children.length, 3);
+  assert.equal(d.nodes.get('.fr-strings').children[0].attributes['aria-label'], 'String 1');
   game.stop();
 });
+
+test('each prompt plays its exact target MIDI pitch and replay/stop clean owned audio', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  const game = mount(d.win, d.container, () => 0);
+  await game.begin();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  const expectedHz = 440 * 2 ** ((48 - 69) / 12);
+  assert.equal(b.tones.length, 1);
+  assert.ok(Math.abs(b.tones[0].hz - expectedHz) < 1e-9);
+  assert.equal(b.tones[0].stoppedAt, .37);
+  assert.equal(d.nodes.get('.fr-hear').hidden, false);
+  d.nodes.get('.fr-hear').onclick();
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+  assert.equal(b.tones.length, 2);
+  assert.equal(b.tones[0].stopCount, 2);
+  game.stop();
+  assert.equal(b.tones[1].stopCount, 2);
+  assert.equal(b.tones[1].disconnected, true);
+  assert.deepEqual(b.counts(), { stopped: 1, closed: 2 });
+});
+
+test('blocked automatic reference playback is visible and manual replay recovers', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  let resumes = 0;
+  d.win.AudioContext = class extends b.win.AudioContext {
+    constructor() { super(); this.state = 'suspended'; }
+    async resume() { resumes++; if (resumes === 1) throw new Error('blocked'); this.state = 'running'; }
+  };
+  const game = mount(d.win, d.container, () => 0);
+  await game.begin();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.match(d.nodes.get('.fr-audio-status').textContent, /blocked or unavailable/i);
+  assert.equal(d.nodes.get('.fr-status').textContent.includes('blocked'), false);
+  d.nodes.get('.fr-hear').onclick();
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(b.tones.length, 1);
+  assert.equal(d.nodes.get('.fr-audio-status').textContent, '');
+  game.stop();
+});
+
 test('desktop mounted startup waits for explicit input confirmation before capture', async () => {
   const d = dom(), b = browser(); const native = desktop(b);
   // Keep the session clock timer separate from capture identity timers.
@@ -266,7 +322,7 @@ test('desktop mounted startup waits for explicit input confirmation before captu
   Object.assign(d.win, b.win);
   let captures = 0; const get = d.win.navigator.mediaDevices.getUserMedia;
   d.win.navigator.mediaDevices.getUserMedia = async constraints => { captures++; return get(constraints); };
-  const game = mount(d.win, d.container); await game.begin();
+  const game = mount(d.win, d.container, () => 0); await game.begin();
   assert.equal(captures, 0); assert.equal(d.nodes.get('.fr-input').hidden, false);
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'consent');
   assert.equal(d.nodes.get('.fr-detected').textContent, '—');
@@ -316,7 +372,7 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   const d = dom(), b = browser(); Object.assign(d.win, b.win);
   let midi = 61, confidence = 1, time = 0;
   d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((midi - 69) / 12), confidence });
-  const game = mount(d.win, d.container); await game.begin();
+  const game = mount(d.win, d.container, () => 0.9); await game.begin();
   const get = name => d.nodes.get(`.fr-${name}`);
   const state = () => get('live').attributes['data-state'];
   const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
@@ -328,7 +384,7 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   assert.equal(state(), 'silence'); assert.equal(get('detected').textContent, '—');
   // This octave is above every possible low-E answer.
   for (let i = 0; i < 5; i++) emit(.05);
-  assert.equal(get('detected').textContent, 'C♯ / D♭4');
+  assert.equal(get('detected').textContent, 'D♭4');
   assert.equal(state(), 'detected'); assert.equal(get('completion').value, 0);
   assert.equal(get('note').textContent, prompt);
   const writes = get('detected').writes;
@@ -339,16 +395,17 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   confidence = 1; emit(.005);
   assert.equal(state(), 'quiet'); assert.equal(get('detected').textContent, '—');
   emit(0); assert.equal(state(), 'silence');
-  const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
-  const pc = names.indexOf(prompt); midi = 40 + ((pc - 40) % 12 + 12) % 12;
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  const aliases = { 'D♭': 1, 'E♭': 3, 'G♭': 6, 'A♭': 8, 'B♭': 10 };
+  const pc = names.indexOf(prompt) < 0 ? aliases[prompt] : names.indexOf(prompt); midi = 40 + ((pc - 40) % 12 + 12) % 12;
   for (let i = 0; i < 3; i++) emit(.05);
   assert.equal(get('completion').value, 1);
   assert.match(get('string').textContent, /String 5/);
-  assert.equal(get('detected').textContent, `${names[pc]}${Math.floor(midi / 12) - 1}`);
+  assert.equal(get('detected').textContent, `${get('note').textContent}${Math.floor(midi / 12) - 1}`);
   assert.equal(state(), 'detected');
   assert.match(get('status').textContent, /Mute/);
-  assert.equal(get('strings').children[5].children[3].textContent, 'Done');
-  assert.equal(get('strings').children[4].children[3].textContent, 'Play this string');
+  assert.equal(get('strings').children[5].children[2].textContent, 'Done');
+  assert.equal(get('strings').children[4].children[2].textContent, 'Play this string');
   d.advance(351); assert.equal(state(), 'expired'); assert.equal(get('detected').textContent, '—');
   emit(.05); assert.equal(state(), 'detected');
   get('pause').onclick(); assert.equal(state(), 'paused'); assert.equal(get('detected').textContent, '—');
@@ -375,7 +432,7 @@ test('retry clears pitch during deferred acquisition and late teardown cannot re
   game.stop(); pending.resolve(b.stream); await retrying;
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'stopped');
   assert.equal(d.nodes.get('.fr-detected').textContent, '—');
-  assert.deepEqual(b.counts(), { stopped: 2, closed: 1 });
+  assert.deepEqual(b.counts(), { stopped: 2, closed: 3 });
 });
 
 test('string diagram follows indexed physical mapping, not pitch sorting, for every supported count', async () => {
@@ -389,13 +446,14 @@ test('string diagram follows indexed physical mapping, not pitch sorting, for ev
     d.win.fetch = async () => ({ ok: true, json: async () => tunings });
     let time = 0, midi;
     d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((midi - 69) / 12), confidence: 1 });
-    const game = mount(d.win, d.container); await game.begin();
+    const game = mount(d.win, d.container, () => 0); await game.begin();
     const rows = d.nodes.get('.fr-strings').children;
     assert.equal(rows.length, count);
-    assert.equal(rows[0].children[2].textContent, 'E2');
-    assert.equal(rows[count - 1].children[2].textContent, 'E4');
+    assert.equal(rows[0].children.length, 3);
+    assert.equal(rows[count - 1].children.length, 3);
     rows.forEach((row, i) => {
       assert.equal(row.children[0].textContent, `${i + 1}`);
+      assert.equal(row.children[2].textContent, i === count - 1 ? 'Play this string' : 'Up next');
       assert.equal(row.attributes['data-state'], i === count - 1 ? 'current' : 'upcoming');
       assert.equal(row.attributes['aria-current'], i === count - 1 ? 'step' : undefined);
     });
@@ -404,7 +462,7 @@ test('string diagram follows indexed physical mapping, not pitch sorting, for ev
     assert.equal(d.nodes.get('.fr-passes').children[0].attributes['data-state'], 'current');
     assert.equal(d.nodes.get('.fr-string').textContent, `String ${count} · lowest-side`);
     const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
-    const names = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+    const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
     for (let answer = 0; answer < 5 * count; answer++) {
       const index = answer % count;
       assert.match(d.nodes.get('.fr-string').textContent, new RegExp(`^String ${count - index}(?: ·|$)`));

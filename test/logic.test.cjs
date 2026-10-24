@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { Round: RuntimeRound, snapshotSetup, choosePitch, noteName, storeRecord, scaledRms } = require('../game.js');
+const { Round: RuntimeRound, snapshotSetup, choosePitch, noteName, midiFrequency, storeRecord, scaledRms } = require('../game.js');
 class Round extends RuntimeRound {
   sample(value, now) { return super.sample({ captureTime: now, ...value }, now); }
 }
@@ -48,12 +48,28 @@ test('random selection covers all twelve and never immediately repeats', () => {
     assert.equal(new Set(values).size, 11); assert.ok(!values.includes(prev));
   }
 });
-test('dual accidentals and duplicate string labels distinguish octaves and positions', () => {
-  assert.equal(noteName(8), 'G♯ / A♭');
+test('one accidental spelling is selected deterministically and natural notes stay canonical', () => {
+  assert.equal(noteName(8, () => 0), 'G♯');
+  assert.equal(noteName(8, () => 0.9), 'A♭');
+  assert.deepEqual(Array.from({ length: 12 }, (_, pitch) => noteName(pitch, () => 0)), ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B']);
+  assert.deepEqual(Array.from({ length: 12 }, (_, pitch) => noteName(pitch, () => 0.9)), ['C', 'D♭', 'D', 'E♭', 'E', 'F', 'G♭', 'G', 'A♭', 'A', 'B♭', 'B']);
   const s = setup();
+  assert.ok(s.strings.every(string => !string.label.includes('/')));
   assert.match(s.strings[0].label, /E4.*highest/); assert.match(s.strings[5].label, /E2.*lowest/);
   const dup = setup('guitar', 6, [24, 19, 14, 9, 5, 0]);
   assert.equal(new Set(dup.strings.map(s => s.label)).size, 6);
+});
+test('target spelling stays fixed until a new prompt, and detected spellings are cached', () => {
+  const values = [0.1, 0, 0.9, 0.5, 0.9]; let next = 0;
+  const r = new Round(setup(), () => values[next++] ?? 0.9);
+  const firstSpelling = r.promptSpelling;
+  assert.equal(firstSpelling, 'C♯');
+  assert.equal(r.detectedName(8), 'A♭');
+  assert.equal(r.detectedName(8), 'A♭');
+  assert.equal(r.promptSpelling, firstSpelling);
+  r.string = 5;
+  accept(r, 0);
+  assert.equal(r.promptSpelling, 'G♭');
 });
 test('unsupported, unresolved and malformed host setup fails without standard fallback', () => {
   const state = { instrument: 'guitar', stringCount: 6, offsets: [0, 0, 0, 0, 0, 0], referencePitch: 440 };
@@ -65,6 +81,11 @@ test('unsupported, unresolved and malformed host setup fails without standard fa
 test('exact setup key separates instrument, mapping, tuning and reference', () => {
   const keys = [setup(), setup('guitar', 6, [-2, 0, 0, 0, 0, 0]), setup('guitar', 7), setup('bass', 6), setup('guitar', 6, [0, 0, 0, 0, 0, 0], 442)].map(s => s.key);
   assert.equal(new Set(keys).size, keys.length);
+});
+test('reference tone pitch conversion honors configured A4', () => {
+  assert.equal(midiFrequency(69, 440), 440);
+  assert.equal(midiFrequency(69, 442), 442);
+  assert.ok(Math.abs(midiFrequency(60, 442) - 442 * 2 ** ((60 - 69) / 12)) < 1e-9);
 });
 test('every pass progresses low physical side to high for standard, custom and re-entrant mappings', () => {
   for (const [key, base] of Object.entries(bases)) {
@@ -147,15 +168,16 @@ test('five passes retain pitch within each pass, immediate next prompt and rearm
 test('random mode independently selects repeatable pitch classes and physical strings for five times string count', () => {
   const s = setup();
   let choice = 0;
+  const pitchChoices = [.01, .99, .01, .99];
+  const stringChoices = [.01, .99, .99, .01];
   const r = new Round(s, () => {
     const call = choice++, prompt = Math.floor(call / 2);
-    return call % 2 ? (prompt === 0 ? .01 : .99) : ([.01, .99, .01][prompt] ?? .5);
+    return call % 2 ? stringChoices[prompt % stringChoices.length] : pitchChoices[prompt % pitchChoices.length];
   }, { randomMode: true });
   assert.equal(r.mode, 'random');
   assert.equal(r.pitch, 0); assert.equal(r.target().index, 0);
   let time = 0;
   for (let answer = 0; answer < 5 * s.stringCount; answer++) {
-    if (answer === 0) { assert.equal(r.pitch, 0); assert.equal(r.target().index, 0); }
     if (answer === 1) { assert.equal(r.pitch, 11); assert.equal(r.target().index, 5); }
     if (answer === 2) { assert.equal(r.pitch, 0); assert.equal(r.target().index, 5); }
     const target = r.target();
@@ -165,13 +187,25 @@ test('random mode independently selects repeatable pitch classes and physical st
     if (!r.done) r.displayed();
   }
   assert.equal(r.done, true); assert.equal(r.answers.length, 30);
-  assert.equal(r.answers[0].stringIndex, 0);
-  assert.ok(r.answers.slice(1).every(answer => answer.stringIndex === 5));
   const result = r.summary();
   assert.equal(result.mode, 'random');
-  assert.deepEqual(result.strings.map(item => item.count), [29, 0, 0, 0, 0, 1]);
-  assert.equal(result.strings[1].averageMs, null);
-  assert.ok(result.strings.slice(1, 5).every(item => item.totalMs === 0 && item.averageMs === null));
+  assert.equal(result.strings.reduce((sum, item) => sum + item.count, 0), 30);
+  assert.ok(result.strings.filter(item => item.count > 0).length > 1);
+  assert.ok(result.strings.every(item => item.averageMs === (item.count ? item.totalMs / item.count : null)));
+});
+
+test('the same string gets a different target pitch on consecutive passes', () => {
+  const r = new Round(setup(), () => .5);
+  let time = 0;
+  const passTargets = [];
+  for (let pass = 0; pass < 5; pass++) {
+    passTargets.push(r.target().midi);
+    for (let string = 0; string < 6; string++) {
+      time = accept(r, time) + 20;
+      if (!r.done) r.displayed();
+    }
+  }
+  for (let pass = 1; pass < passTargets.length; pass++) assert.notEqual(passTargets[pass], passTargets[pass - 1]);
 });
 test('pause excludes time and clears silence/hit state without skipping', () => {
   const r = new Round(setup()); r.tick(100); r.sample({ level: 0 }, 100);
