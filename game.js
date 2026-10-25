@@ -554,20 +554,22 @@
        roundDetails.appendChild(list);
        trend.appendChild(chart); trend.appendChild(roundDetails);
 
-      heatmap.appendChild(node('h4', '', 'Target pitch class by physical string'));
-      heatmap.appendChild(node('p', 'fr-history-note', 'Cells show average / slowest time in seconds · accepted-answer count · intensity level (for example, 1.20 / 2.40 · 3 · L2). Rows are requested strings, highest-side to lowest-side; columns are target pitch classes, not detected string identities.'));
+      heatmap.appendChild(node('h4', '', 'Fretboard timing by requested string'));
+      heatmap.appendChild(node('p', 'fr-history-note', 'Each row follows one requested string from its open note (fret 0) through fret 11. A saved target note is placed at the fret derived from that string’s tuned open MIDI note. Cells show note name · average / slowest time in seconds · accepted-answer count · intensity level.'));
       heatmap.appendChild(node('p', 'fr-history-note', 'Intensity compares populated cells: level 1 is faster and level 4 is slower. Color is not the only indicator.'));
       const table = node('table', 'fr-heatmap');
-      table.appendChild(node('caption', '', 'Average accepted-answer times by physical string and target pitch class'));
+      table.appendChild(node('caption', '', 'Accepted-answer timing by requested string and derived fret, from open string fret 0 through fret 11'));
       const head = node('thead'), headerRow = node('tr');
-      const physicalHeader = node('th', '', 'Physical string'); physicalHeader.setAttribute('scope', 'col'); headerRow.appendChild(physicalHeader);
-      NAMES.forEach(name => { const header = node('th', '', name); header.setAttribute('scope', 'col'); headerRow.appendChild(header); });
+      const physicalHeader = node('th', '', 'Requested string · open note'); physicalHeader.setAttribute('scope', 'col'); headerRow.appendChild(physicalHeader);
+      for (let fret = 0; fret < 12; fret++) { const header = node('th', '', `Fret ${fret}`); header.setAttribute('scope', 'col'); headerRow.appendChild(header); }
       head.appendChild(headerRow); table.appendChild(head);
       const body = node('tbody');
       const allAnswers = record.runs.flatMap((run, runIndex) => run.answers.map(answer => ({ ...answer, runIndex })));
       const aggregates = new Map();
       allAnswers.forEach(answer => {
-        const key = `${answer.stringIndex},${answer.pitch}`;
+        const string = setup.strings.find(item => item.index === answer.stringIndex);
+        const fret = mod(answer.pitch - mod(string.midi));
+        const key = `${answer.stringIndex},${fret}`;
         let aggregate = aggregates.get(key);
         if (!aggregate) {
           aggregate = { totalMs: 0, count: 0, slowestMs: 0 };
@@ -583,21 +585,25 @@
       const rows = setup.strings.slice().sort((a, b) => (setup.stringCount - a.index) - (setup.stringCount - b.index));
       rows.forEach(string => {
         const row = node('tr');
-        const rowHeader = node('th', '', `String ${setup.stringCount - string.index}${setup.stringCount - string.index === 1 ? ' · highest-side' : setup.stringCount - string.index === setup.stringCount ? ' · lowest-side' : ''}`);
+        const number = setup.stringCount - string.index;
+        const side = number === 1 ? ' · highest-side' : number === setup.stringCount ? ' · lowest-side' : '';
+        const openNote = NAMES[mod(string.midi)];
+        const rowHeader = node('th', '', `String ${number}${side} · open ${openNote}${Math.floor(string.midi / 12) - 1}`);
         rowHeader.setAttribute('scope', 'row'); row.appendChild(rowHeader);
-        NAMES.forEach((name, pitch) => {
-          const cell = node('td');
-          const aggregate = aggregates.get(`${string.index},${pitch}`);
-          if (aggregate) {
-            const average = aggregate.totalMs / aggregate.count;
-            const level = intensity(average);
-            cell.textContent = `${seconds(average)} / ${seconds(aggregate.slowestMs)} · ${aggregate.count} · L${level}`;
-            cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: average ${seconds(average)}, ${aggregate.count} accepted answers, slowest recent ${seconds(aggregate.slowestMs)}, intensity ${level} of 4${level === 4 ? ', slower' : ''}`);
-            cell.setAttribute('data-attempts', aggregate.count);
-            cell.setAttribute('data-intensity', level);
-          } else { cell.textContent = '—'; cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: no saved answers`); }
-          row.appendChild(cell);
-        });
+        for (let fret = 0; fret < 12; fret++) {
+           const cell = node('td');
+           const name = NAMES[mod(string.midi + fret)];
+           const aggregate = aggregates.get(`${string.index},${fret}`);
+           if (aggregate) {
+             const average = aggregate.totalMs / aggregate.count;
+             const level = intensity(average);
+             cell.textContent = `${name} · ${seconds(average)} / ${seconds(aggregate.slowestMs)} · ${aggregate.count} · L${level}`;
+             cell.setAttribute('aria-label', `String ${number}, ${name}, fret ${fret}: average ${seconds(average)}, ${aggregate.count} accepted answers, slowest recent ${seconds(aggregate.slowestMs)}, intensity ${level} of 4${level === 4 ? ', slower' : ''}`);
+             cell.setAttribute('data-attempts', aggregate.count);
+             cell.setAttribute('data-intensity', level);
+           } else { cell.textContent = '—'; cell.setAttribute('aria-label', `String ${number}, ${name}, fret ${fret}: no saved answers`); }
+           row.appendChild(cell);
+        }
         body.appendChild(row);
       });
       table.appendChild(body);

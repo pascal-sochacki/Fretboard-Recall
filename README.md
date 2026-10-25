@@ -125,19 +125,22 @@ setup key; random-mode entries use that setup key with `:random` appended. Open
 which uses a responsive two-column desktop layout and stacks on narrow screens.
 The round-time trend is a compact chart; open its ordered list to read
 the exact times. It shows all available detailed round-time trends (oldest to
-newest) and a target-pitch-class
-by physical-string table with average accepted-answer time, attempt count, and
-slowest recent answer. Populated heatmap cells are grouped into four relative
-average-time intensity levels for the current heatmap: level 1 is faster and
-level 4 is slower. Every cell compactly displays its average and slowest time,
-attempt count, and written intensity level. Higher intensity means slower
-accepted responses, and color is not the only indicator. A ranked list also
-highlights the slowest five answers.
+newest) and a guitar-neck-style table: rows are requested strings in
+highest-side-to-lowest-side order, labeled with their tuned open note, and
+columns are frets 0–11. Fret 0 is the open string. Because saved answers contain
+the requested target pitch class and string mapping, the table derives each
+fret from that string's open MIDI note when rendering; the same note can
+therefore appear in different fret columns across strings. Cells display the
+note name, average and slowest accepted-answer time, attempt count, and written
+intensity level. Populated cells are grouped into four relative average-time
+intensity levels: level 1 is faster and level 4 is slower. Higher intensity
+means slower accepted responses, and color is not the only indicator. A ranked
+list also highlights the slowest five answers.
 The textual table and labels carry the same information without relying on
-color or hover. “String” here is the requested physical string mapping; input
-pitch cannot verify which string was played, and incorrect notes are not
-recorded or counted. Times are prompt-to-acceptance durations, including mute
-and detection latency.
+color or hover. “String” here is the requested string mapping, not a detected
+physical string: input pitch cannot verify which string was played, and
+incorrect notes are not recorded or counted. Times are prompt-to-acceptance
+durations, including mute and detection latency.
 
 New detailed history begins with the next completed round. Older installs keep
 their completed count, personal best and latest summary, but do not get

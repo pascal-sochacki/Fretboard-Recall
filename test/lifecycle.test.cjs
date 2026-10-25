@@ -233,14 +233,31 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(trend.children[2].children[1].children.length, 1);
   assert.match(trend.children[2].children[0].textContent, /View exact round times/);
   const heatmap = d.nodes.get('.fr-history-heatmap').children[3].children[0];
+  assert.equal(heatmap.children[1].children[0].children.length, 13);
+  assert.deepEqual(heatmap.children[1].children[0].children.slice(1).map(header => header.textContent), Array.from({ length: 12 }, (_, fret) => `Fret ${fret}`));
   assert.equal(heatmap.children[2].children.length, 6);
-  assert.match(heatmap.children[2].children[0].children[0].textContent, /String 1 · highest-side/);
-  assert.match(heatmap.children[2].children[5].children[0].textContent, /String 6 · lowest-side/);
-  const cells = heatmap.children[2].children.flatMap(row => row.children.slice(1));
-  assert.ok(cells.some(cell => /^\d+\.\d+ s \/ \d+\.\d+ s · \d+ · L[1-4]$/.test(cell.textContent)));
-  assert.ok(cells.every(cell => cell.textContent.length < 32));
-  assert.ok(cells.some(cell => /average .* accepted answers, slowest recent .* intensity [1-4] of 4/.test(cell.attributes['aria-label'])));
-  assert.ok(cells.some(cell => cell.textContent === '—' && /no saved answers/.test(cell.attributes['aria-label'])));
+  assert.match(heatmap.children[2].children[0].children[0].textContent, /String 1 · highest-side · open E4/);
+  assert.match(heatmap.children[2].children[5].children[0].textContent, /String 6 · lowest-side · open E2/);
+  const rows = heatmap.children[2].children;
+  const cells = rows.flatMap(row => row.children.slice(1));
+  assert.ok(cells.some(cell => /^[A-G](?:♯ \/ [A-G]♭)? · \d+\.\d+ s \/ \d+\.\d+ s · \d+ · L[1-4]$/.test(cell.textContent)));
+  assert.ok(cells.every(cell => cell.textContent.length < 48));
+  assert.ok(cells.some(cell => /String \d, .+, fret \d: average .* accepted answers, slowest recent .* intensity [1-4] of 4/.test(cell.attributes['aria-label'])));
+  assert.ok(cells.some(cell => cell.textContent === '—' && /String \d, .+, fret \d: no saved answers/.test(cell.attributes['aria-label'])));
+  rows.forEach((row, rowIndex) => {
+    const openMidi = [64, 59, 55, 50, 45, 40][rowIndex];
+    const used = row.children.slice(1).filter(cell => cell.attributes['data-attempts']);
+    assert.equal(used.reduce((total, cell) => total + +cell.attributes['data-attempts'], 0), 5);
+    used.forEach((cell, fret) => {
+      const column = row.children.indexOf(cell) - 1;
+      const notes = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
+      const expectedNote = notes[(openMidi + column) % 12];
+      assert.equal(cell.textContent.split(' · ')[0], expectedNote);
+      assert.match(cell.attributes['aria-label'], new RegExp(`fret ${column}:`));
+    });
+  });
+  const cFretColumns = rows.map(row => row.children.slice(1).findIndex(cell => cell.textContent.startsWith('C ·')));
+  assert.ok(new Set(cFretColumns.filter(fret => fret >= 0)).size > 1);
   assert.match(d.nodes.get('.fr-history-heatmap').children[2].textContent, /level 1 is faster and level 4 is slower/);
   assert.match(d.container.innerHTML, /does not identify a physical string or log incorrect notes/);
   assert.equal(d.nodes.get('.fr-retry').textContent, 'Play again');
