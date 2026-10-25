@@ -22,6 +22,7 @@
   const LOUD = 0.04;
   const LIVE_EXPIRES_MS = 350;
   const STORAGE_KEY = 'fretboard_recall.records.v1';
+  const PREFERENCES_KEY = 'fretboard_recall.preferences.v1';
   const RANDOM_RECORD_SUFFIX = ':random';
   const midiFrequency = (midi, referencePitch) => referencePitch * 2 ** ((midi - 69) / 12);
 
@@ -59,7 +60,6 @@
       this.mode = randomMode ? 'random' : 'standard';
       this.pass = 0;
       this.string = 0;
-      this.liveSpellings = new Map();
       if (this.mode === 'random') this.chooseRandomPrompt();
       else this.pitch = choosePitch(null, random);
       this.updatePromptSpelling();
@@ -88,11 +88,6 @@
     }
     updatePromptSpelling() {
       this.promptSpelling = noteName(this.pitch, this.random);
-    }
-    detectedName(midi) {
-      const pitch = mod(midi);
-      if (!this.liveSpellings.has(pitch)) this.liveSpellings.set(pitch, noteName(pitch, this.random));
-      return this.liveSpellings.get(pitch);
     }
     tick(dt) { if (!this.paused && !this.done) this.elapsed += dt; }
     pause(value) { this.paused = value; this.resetGate(); }
@@ -195,6 +190,17 @@
     records[key] = next;
     storage.setItem(STORAGE_KEY, JSON.stringify(records));
     return records[key];
+  }
+
+  function readRandomPreference(win) {
+    try {
+      const value = JSON.parse(win.localStorage.getItem(PREFERENCES_KEY) || 'null');
+      return value?.version === 1 && typeof value.randomMode === 'boolean' ? value.randomMode : false;
+    } catch (_) { return false; }
+  }
+
+  function storeRandomPreference(win, randomMode) {
+    try { win.localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, randomMode })); } catch (_) {}
   }
 
   async function resolveDesktopInput(win) {
@@ -321,7 +327,7 @@
     return Math.min(1, Math.sqrt(sum / samples.length) * 5);
   }
 
-  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, readRecord, storeRecord, scaledRms, resolveDesktopInput, openBrowser, mount };
+  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, readRecord, storeRecord, readRandomPreference, storeRandomPreference, scaledRms, resolveDesktopInput, openBrowser, mount };
   if (typeof module !== 'undefined' && module.exports) { module.exports = logic; return; }
   if (root.__fretboardRecallLoaded) return;
   root.__fretboardRecallLoaded = true;
@@ -344,14 +350,14 @@
       <p class="fr-setup">Reading your FeedBack setup…</p>
       <div class="fr-action-row"><label class="fr-mode"><input type="checkbox" class="fr-random-mode"> Random note + string</label>
       <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause" disabled>Pause</button><button type="button" class="fr-retry">Start round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div></div>
-      <div class="fr-round-progress"><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
+      <div class="fr-round-progress" hidden><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
       <div class="fr-active-grid">
         <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-mute-cue" data-state="idle" role="status" aria-live="polite" aria-atomic="true"><span class="fr-mute-cue-icon" aria-hidden="true"></span><span class="fr-mute-cue-text"></span></p><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Play the requested physical string; pitch detection cannot verify which string you play. Frets 0–11.</p></section>
-        <section class="fr-live" aria-label="Live detected note"><p class="fr-eyebrow">Live input · detected note</p><p class="fr-detected">—</p><p class="fr-live-status">Not listening</p><p class="fr-hint">Reported pitch and octave only.</p></section>
+        <section class="fr-live" aria-label="Audio input status"><p class="fr-eyebrow">Audio input</p><p class="fr-live-status" role="status" aria-live="polite" aria-atomic="true">Not listening</p><p class="fr-hint">Input feedback never names played notes.</p></section>
         <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side · string <span class="fr-string-count"></span></p></section>
       </div>
        <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
-       <details class="fr-results"><summary>Round results &amp; progress</summary><div class="fr-results-content"><div class="fr-summary"></div>
+       <details class="fr-results" hidden><summary>Round results &amp; progress</summary><div class="fr-results-content"><div class="fr-summary"></div>
          <section class="fr-history" aria-labelledby="fr-history-title"><h3 id="fr-history-title">Progress for this exact setup</h3><p class="fr-history-note">Saved on this browser/device only. Trends use accepted target answers and round time; the microphone does not identify a physical string or log incorrect notes.</p><p class="fr-history-status" role="status"></p><div class="fr-history-trend"></div><div class="fr-history-heatmap"></div><div class="fr-history-worst"></div></section>
          <p class="fr-warning">Microphone/DI pitch cannot verify which physical string produced a note shared by multiple strings. Honor the requested string; no string detection is claimed.</p>
        </div></details>
@@ -365,7 +371,7 @@
     let error = false, acquiring = false, starting = false;
     let desktopInput = null;
     let stringRows = [], passSteps = [];
-    let liveState = '', liveNote = '', liveAt = null;
+    let liveState = '', liveAt = null;
     const host = win.feedBack;
     const quit = doc.getElementById('mg-stage-quit');
     const text = (name, value) => { const node = cached(name); if (node.textContent !== value) node.textContent = value; };
@@ -462,13 +468,14 @@
       if (cue.getAttribute('data-state') !== state) cue.setAttribute('data-state', state);
       text('mute-cue-text', message);
     }
-    el('random-mode').onchange = () => { updateControls(); if (setup) renderHistory(); };
-    function setLive(state, note = '—') {
-      if (liveState === state && liveNote === note) return;
-      const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet for pitch detection', uncertain: 'Uncertain pitch · play one clear note', detected: 'Pitch detected · reported octave', paused: 'Paused · input display cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio · last pitch cleared' };
-      liveState = state; liveNote = note;
+    el('random-mode').checked = readRandomPreference(win);
+    el('random-mode').onchange = () => { storeRandomPreference(win, el('random-mode').checked); updateControls(); if (setup) renderHistory(); };
+    function setLive(state) {
+      if (liveState === state) return;
+      const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet', uncertain: 'Uncertain audio · play one clear note', wrong: 'Wrong note — try again', paused: 'Paused · input feedback cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio' };
+      liveState = state;
       cached('live').setAttribute('data-state', state);
-      text('detected', note); text('live-status', labels[state]);
+      text('live-status', labels[state]);
     }
     function resetLive(state) { liveAt = null; setLive(state); }
     const release = () => { generation++; referenceAttempt++; promptAudioGeneration++; closeReferenceAudio(); adapter?.stop(); adapter = null; acquiring = false; starting = false; resetLive('stopped'); };
@@ -665,11 +672,20 @@
       if (!alive) return;
       round?.tick(dt);
       if (round && !round.done) text('clock', `Round ${seconds(round.elapsed)} · This prompt ${seconds(round.elapsed - round.promptAt)}${round.paused ? ' · paused' : ''}`);
-      if (liveAt !== null && !round?.paused && now - liveAt > LIVE_EXPIRES_MS) resetLive('expired');
+      if (liveAt !== null && !round?.paused && now - liveAt > LIVE_EXPIRES_MS) {
+        resetLive('expired');
+        if (round && !round.done && !error) {
+          const gateArmed = round.armed && (round.lastSample === null || now - round.lastSample <= MAX_GAP_MS);
+          text('status', gateArmed ? 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
+        }
+      }
       if (adapter && !round?.paused && now - lastInput > 2000) fail(new Error('Live input frames stopped arriving.'));
     }
     function finish() {
       release();
+      el('round-progress').hidden = false;
+      el('results').hidden = false;
+      el('results').open = true;
       resetLive('complete');
       updateMuteCue();
       el('pause').disabled = true;
@@ -700,20 +716,22 @@
       // Never display a stale/invalid estimate as a stable live note.
       const valid = Number.isFinite(value.captureTime) && (round.lastCaptureTime === null || value.captureTime > round.lastCaptureTime) && Number.isFinite(value.level) && value.level >= 0 && value.level <= 1;
       liveAt = lastInput;
+      const gateStillArmed = round.armed && !(round.lastSample !== null && lastInput - round.lastSample > MAX_GAP_MS);
+      const confidentLoud = valid && value.level >= LOUD && Number.isFinite(value.midi) && value.confidence >= 0.7;
+      const wrong = gateStillArmed && confidentLoud && Math.abs(value.midi - round.target().midi) > 0.35;
       if (!valid) setLive('uncertain');
       else if (value.level < QUIET) setLive('silence');
       else if (value.level < LOUD) setLive('quiet');
       else if (!Number.isFinite(value.midi) || !(value.confidence >= 0.7)) setLive('uncertain');
-      else {
-        const midi = Math.round(value.midi);
-        setLive('detected', `${round.detectedName(midi)}${Math.floor(midi / 12) - 1}`);
-      }
+      else if (wrong) setLive('wrong');
+      else setLive('listening');
       if (round.sample(value, lastInput)) {
         if (round.done) finish(); else renderPrompt();
         return;
       }
       updateMuteCue();
-      text('status', round.armed ? 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
+      if (wrong) text('status', 'Wrong note — try again.');
+      else text('status', round.armed ? 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
     }
     async function acquire() {
       const gen = ++generation;
@@ -741,6 +759,8 @@
       text('note', ''); text('string', ''); text('clock', ''); text('progress', '');
       el('summary').replaceChildren(); el('pause').disabled = true;
       el('results').open = false;
+      el('results').hidden = true;
+      el('round-progress').hidden = true;
       const gen = generation;
       try {
         if (!host?.workingTuning?.get || !host?.on || !host?.off || !host?.navigate || !quit) throw new Error('Required FeedBack host lifecycle/settings APIs unavailable. Update FeedBack.');

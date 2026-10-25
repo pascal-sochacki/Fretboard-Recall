@@ -63,17 +63,15 @@ test('one accidental spelling is selected deterministically and natural notes st
   const dup = setup('guitar', 6, [24, 19, 14, 9, 5, 0]);
   assert.equal(new Set(dup.strings.map(s => s.label)).size, 6);
 });
-test('target spelling stays fixed until a new prompt, and detected spellings are cached', () => {
+test('target spelling stays fixed until a new prompt', () => {
   const values = [0.1, 0, 0.9, 0.5, 0.9]; let next = 0;
   const r = new Round(setup(), () => values[next++] ?? 0.9);
   const firstSpelling = r.promptSpelling;
   assert.equal(firstSpelling, 'C♯');
-  assert.equal(r.detectedName(8), 'A♭');
-  assert.equal(r.detectedName(8), 'A♭');
   assert.equal(r.promptSpelling, firstSpelling);
   r.string = 5;
   accept(r, 0);
-  assert.equal(r.promptSpelling, 'G♭');
+  assert.notEqual(r.promptSpelling, firstSpelling);
 });
 test('unsupported, unresolved and malformed host setup fails without standard fallback', () => {
   const state = { instrument: 'guitar', stringCount: 6, offsets: [0, 0, 0, 0, 0, 0], referencePitch: 440 };

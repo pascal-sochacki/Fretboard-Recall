@@ -44,9 +44,10 @@
 .fr-game .fr-mute-cue[data-state="failed"] .fr-mute-cue-icon::before { content: "×"; }
 .fr-game .fr-mute-cue[data-state="complete"] .fr-mute-cue-icon::before { content: "✓"; }
 .fr-game .fr-audio-status { color: var(--fr-muted); font-size: 11px; min-height: 1.2em; margin-top: 4px; }
-.fr-game .fr-detected { margin: 5px 0 3px; font-size: clamp(30px, 4vw, 48px); line-height: 1; font-weight: 750; min-height: 1em; overflow-wrap: anywhere; }
-.fr-game .fr-live-status { color: #ccdcf5; font-size: 12px; min-height: 1.4em; }
+.fr-game .fr-live-status { color: #ccdcf5; font-size: 14px; font-weight: 650; min-height: 1.4em; }
 .fr-game .fr-live[data-state="uncertain"] .fr-live-status, .fr-game .fr-live[data-state="failed"] .fr-live-status { color: #ffdc9c; }
+.fr-game .fr-live[data-state="wrong"] { border-color: #e77a78; background: #3b242b; }
+.fr-game .fr-live[data-state="wrong"] .fr-live-status { color: #ffaaa5; }
 .fr-game .fr-hint { color: var(--fr-muted); font-size: 11px; margin-top: 6px; }
 .fr-game .fr-strings-panel { min-width: 0; padding: 10px 12px; border: 1px solid #3c4d60; border-radius: 13px; background: #101c29; }
 .fr-game .fr-diagram-heading { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 3px; }
@@ -123,6 +124,8 @@
   .fr-game .fr-mute-cue[data-state="armed"] { border-style: solid; border-color: Highlight; }
   .fr-game .fr-mute-cue-icon { color: CanvasText; }
   .fr-game .fr-mute-cue[data-state="armed"] .fr-mute-cue-icon { color: Highlight; }
+  .fr-game .fr-live[data-state="wrong"] { border-color: Highlight; }
+  .fr-game .fr-live[data-state="wrong"] .fr-live-status { color: Highlight; }
   .fr-game .fr-string-row[data-state="current"], .fr-game .fr-pass[data-state="current"] { border: 2px solid Highlight; }
   .fr-game .fr-wire { background: CanvasText; }
 }

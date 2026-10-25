@@ -196,6 +196,8 @@ test('complete mounted browser round saves once locally and never submits framew
   const records = new Map(); d.win.localStorage = { getItem: k => k === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : records.get(k), setItem: (k, v) => { saves++; records.set(k, v); } };
   d.win.feedBackMinigames = { end: () => assert.fail('public submission') };
   const game = mount(d.win, d.container, () => 0); await game.begin(); let time = 0;
+  assert.equal(d.nodes.get('.fr-results').hidden, true);
+  assert.equal(d.nodes.get('.fr-round-progress').hidden, true);
   assert.equal(d.nodes.get('.fr-string').textContent, 'String 6 · lowest-side');
   assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
@@ -220,12 +222,12 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.match(d.nodes.get('.fr-progress').textContent, /Completed: 5 passes/);
   assert.equal(d.nodes.get('.fr-mute-cue').attributes['data-state'], 'complete');
   assert.match(d.nodes.get('.fr-mute-cue-text').textContent, /Round complete/);
-  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'complete');
   assert.equal(d.nodes.get('.fr-completion').value, 30);
   assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
-  assert.equal(d.nodes.get('.fr-results').open, false);
+  assert.equal(d.nodes.get('.fr-results').hidden, false);
+  assert.equal(d.nodes.get('.fr-results').open, true);
   assert.match(d.nodes.get('.fr-history-status').textContent, /1 completed rounds.*showing up to the latest 100/);
   const trend = d.nodes.get('.fr-history-trend');
   assert.equal(trend.children[1].attributes.role, 'img');
@@ -263,19 +265,22 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(d.nodes.get('.fr-retry').textContent, 'Play again');
   d.nodes.get('.fr-retry').onclick();
   for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.equal(d.nodes.get('.fr-results').hidden, true);
+  assert.equal(d.nodes.get('.fr-results').open, false);
   assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   assert.deepEqual(b.counts(), { stopped: 1, closed: 2 }); game.stop(); assert.equal(d.timers.size, 0);
 });
-test('results are in one closed, native disclosure and active play uses compact desktop columns', () => {
+test('results start hidden in one native disclosure and active play uses compact desktop columns', () => {
   const d = dom(), game = mount(d.win, d.container);
-  assert.match(d.container.innerHTML, /<details class="fr-results"><summary>Round results &amp; progress<\/summary>/);
-  assert.doesNotMatch(d.container.innerHTML.match(/<details class="fr-results">([^]*?)<\/details>/)[0].split('>')[0], /\sopen(?:\s|>)/);
+  assert.match(d.container.innerHTML, /<details class="fr-results" hidden><summary>Round results &amp; progress<\/summary>/);
+  assert.doesNotMatch(d.container.innerHTML.match(/<details class="fr-results"[^>]*>([^]*?)<\/details>/)[0].split('>')[0], /\sopen(?:\s|>)/);
   assert.match(d.container.innerHTML, /class="fr-results-content"><div class="fr-summary"><\/div>[\s\S]*fr-history[\s\S]*fr-warning/);
   game.stop();
   const css = fs.readFileSync(require.resolve('../assets/game.css'), 'utf8');
   assert.match(css, /\.fr-active-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.1fr\) minmax\(0, \.85fr\) minmax\(250px, 1fr\)/);
   assert.match(css, /\.fr-string-row\s*\{[^}]*min-height:\s*25px/);
   assert.match(css, /\.fr-game\s*\{[^}]*padding:\s*clamp\(12px, 2vw, 22px\)/);
+  assert.match(css, /\.fr-game \[hidden\]\s*\{\s*display:\s*none !important;/);
   assert.match(css, /\.fr-results > summary\s*\{[^}]*cursor:\s*pointer/);
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.fr-active-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
   assert.match(css, /\.fr-heatmap-wrap\s*\{\s*overflow-x:\s*auto;/);
@@ -330,6 +335,41 @@ test('random mode UI stays selectable only between rounds, reports actual prompt
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.match(get('progress').textContent, /^Pass 1 \/ 5/);
   assert.equal(get('passes').hidden, false);
+});
+
+test('random preference saves separately and restores across mounts; invalid or unavailable storage defaults safely', async () => {
+  const records = new Map();
+  const storage = { getItem: key => records.get(key) ?? null, setItem: (key, value) => records.set(key, value) };
+  const d = dom(); d.win.localStorage = storage;
+  let game = mount(d.win, d.container);
+  const mode = d.nodes.get('.fr-random-mode');
+  assert.equal(mode.checked, false);
+  mode.checked = true; mode.onchange();
+  assert.deepEqual(JSON.parse(records.get('fretboard_recall.preferences.v1')), { version: 1, randomMode: true });
+  assert.equal(records.has('fretboard_recall.records.v1'), false);
+  game.stop();
+
+  const reloaded = dom(); reloaded.win.localStorage = storage;
+  game = mount(reloaded.win, reloaded.container);
+  assert.equal(reloaded.nodes.get('.fr-random-mode').checked, true);
+  await game.begin();
+  assert.match(reloaded.nodes.get('.fr-progress').textContent, /^Random prompts/);
+  game.stop();
+
+  for (const stored of ['not-json', '{"version":2,"randomMode":true}', '{"version":1,"randomMode":"true"}']) {
+    const corrupt = dom(); corrupt.win.localStorage = { getItem: () => stored, setItem() { throw new Error('unavailable'); } };
+    const session = mount(corrupt.win, corrupt.container);
+    assert.equal(corrupt.nodes.get('.fr-random-mode').checked, false);
+    corrupt.nodes.get('.fr-random-mode').checked = true;
+    assert.doesNotThrow(() => corrupt.nodes.get('.fr-random-mode').onchange());
+    session.stop();
+  }
+  const unavailable = dom(); Object.defineProperty(unavailable.win, 'localStorage', { get() { throw new Error('blocked'); } });
+  const session = mount(unavailable.win, unavailable.container);
+  assert.equal(unavailable.nodes.get('.fr-random-mode').checked, false);
+  unavailable.nodes.get('.fr-random-mode').checked = true;
+  assert.doesNotThrow(() => unavailable.nodes.get('.fr-random-mode').onchange());
+  session.stop();
 });
 
 test('requested-string diagram hides open pitches and play again starts a fresh round', async () => {
@@ -407,7 +447,6 @@ test('desktop mounted startup waits for explicit input confirmation before captu
   const game = mount(d.win, d.container, () => 0); await game.begin();
   assert.equal(captures, 0); assert.equal(d.nodes.get('.fr-input').hidden, false);
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'consent');
-  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
   assert.match(d.nodes.get('.fr-status').textContent, /USB DI.*Channel 2.*Confirm/);
   d.nodes.get('.fr-input').onclick();
   for (let i = 0; i < 20; i++) await Promise.resolve();
@@ -450,7 +489,7 @@ test('unannounced tuning changes during identity resolution or before consent ar
   }
 });
 
-test('live card shows wrong pitches, clears uncertain/silent input and preserves only the acceptance sample', async () => {
+test('audio feedback never names played notes and flags only confidently graded wrong notes while armed', async () => {
   const d = dom(), b = browser(); Object.assign(d.win, b.win);
   let midi = 61, confidence = 1, time = 0;
   d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((midi - 69) / 12), confidence });
@@ -465,27 +504,42 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   assert.equal(cue().attributes['data-state'], 'waiting');
   assert.match(cueText(), /Mute all strings.*then play String 6/);
   assert.match(d.container.innerHTML, /aria-live="polite" aria-atomic="true"/);
-  assert.doesNotMatch(d.container.innerHTML.match(/<section class="fr-live"[\s\S]*?<\/section>/)[0], /aria-live|role="status"/);
+  assert.match(d.container.innerHTML.match(/<section class="fr-live"[\s\S]*?<\/section>/)[0], /role="status" aria-live="polite"/);
   const prompt = get('note').textContent;
+  emit(.05);
+  assert.equal(state(), 'listening');
+  assert.doesNotMatch(get('live-status').textContent, /Wrong note/);
+  assert.doesNotMatch(get('status').textContent, /Wrong note/);
   for (let i = 0; i < 4; i++) emit(0);
-  assert.equal(state(), 'silence'); assert.equal(get('detected').textContent, '—');
+  assert.equal(state(), 'silence');
   assert.equal(cue().attributes['data-state'], 'armed');
   assert.match(cueText(), /Silence gate armed — now play String 6/);
   const armedCueWrites = get('mute-cue-text').writes;
   // This octave is above every possible low-E answer.
   for (let i = 0; i < 5; i++) emit(.05);
-  assert.equal(get('detected').textContent, 'D♭4');
+  assert.equal(get('live-status').textContent, 'Wrong note — try again');
+  assert.equal(get('status').textContent, 'Wrong note — try again.');
+  assert.equal(get('live').attributes['data-state'], 'wrong');
   assert.equal(get('mute-cue-text').writes, armedCueWrites, 'stable armed state does not churn cue DOM');
-  assert.equal(state(), 'detected'); assert.equal(get('completion').value, 0);
+  assert.equal(state(), 'wrong'); assert.equal(get('completion').value, 0);
   assert.equal(get('note').textContent, prompt);
   assert.match(cueText(), /Silence gate armed — now play String 6/);
-  const writes = get('detected').writes;
+  d.advance(351);
+  assert.equal(state(), 'expired');
+  assert.equal(get('status').textContent, 'Mute all strings briefly; then pluck the requested string.');
+  assert.doesNotMatch(get('status').textContent, /Ready|Wrong note/);
+  assert.doesNotMatch(get('status').textContent, /String [0-9]|[A-G](?:♯|♭)?\d/);
+  for (let i = 0; i < 4; i++) emit(0);
+  assert.equal(cue().attributes['data-state'], 'armed');
+  assert.match(get('status').textContent, /Ready — pluck the requested string/);
+  emit(.05);
+  const writes = get('live-status').writes;
   emit(.05); emit(.05);
-  assert.equal(get('detected').writes, writes, 'Unchanged detected notes must not rewrite DOM');
+  assert.equal(get('live-status').writes, writes, 'Stable generic status must not rewrite DOM');
   confidence = .69; emit(.05);
-  assert.equal(state(), 'uncertain'); assert.equal(get('detected').textContent, '—');
+  assert.equal(state(), 'uncertain'); assert.equal(get('live-status').textContent, 'Uncertain audio · play one clear note');
   confidence = 1; emit(.005);
-  assert.equal(state(), 'quiet'); assert.equal(get('detected').textContent, '—');
+  assert.equal(state(), 'quiet'); assert.equal(get('live-status').textContent, 'Listening · signal too quiet');
   emit(0); assert.equal(state(), 'silence');
   const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
   const aliases = { 'D♭': 1, 'E♭': 3, 'G♭': 6, 'A♭': 8, 'B♭': 10 };
@@ -495,43 +549,44 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   assert.match(get('string').textContent, /String 5/);
   assert.equal(cue().attributes['data-state'], 'waiting');
   assert.match(cueText(), /Mute all strings.*then play String 5/);
-  assert.equal(get('detected').textContent, `${get('note').textContent}${Math.floor(midi / 12) - 1}`);
-  assert.equal(state(), 'detected');
+  assert.equal(get('live-status').textContent, 'Listening · waiting for a fresh sample');
+  assert.equal(state(), 'listening');
+  assert.doesNotMatch(get('live-status').textContent, /[A-G](?:♯|♭)?\d/);
   assert.match(get('status').textContent, /Mute/);
   assert.equal(get('strings').children[5].children[2].textContent, 'Done');
   assert.equal(get('strings').children[4].children[2].textContent, 'Play this string');
-  d.advance(351); assert.equal(state(), 'expired'); assert.equal(get('detected').textContent, '—');
-  emit(.05); assert.equal(state(), 'detected');
-  get('pause').onclick(); assert.equal(state(), 'paused'); assert.equal(get('detected').textContent, '—');
+  d.advance(351); assert.equal(state(), 'expired');
+  emit(.05); assert.equal(state(), 'listening');
+  get('pause').onclick(); assert.equal(state(), 'paused');
   assert.equal(cue().attributes['data-state'], 'paused');
   assert.match(cueText(), /Paused — resume, then mute all strings before playing String 5/);
   emit(.05); assert.equal(state(), 'paused');
-  get('pause').onclick(); assert.equal(state(), 'listening'); assert.equal(get('detected').textContent, '—');
+  get('pause').onclick(); assert.equal(state(), 'listening');
   assert.equal(cue().attributes['data-state'], 'waiting');
-  emit(.05); assert.equal(state(), 'detected');
-  d.advance(2100); assert.equal(state(), 'failed'); assert.equal(get('detected').textContent, '—');
+  emit(.05); assert.equal(state(), 'listening');
+  d.advance(2100); assert.equal(state(), 'failed');
   assert.equal(cue().attributes['data-state'], 'failed');
   assert.doesNotMatch(cueText(), /Muted — now play/);
   assert.match(get('status').textContent, /frames stopped/);
   await game.begin(); assert.equal(state(), 'listening'); assert.equal(get('completion').value, 0);
   assert.equal(cue().attributes['data-state'], 'waiting');
-  game.stop(); assert.equal(state(), 'stopped'); assert.equal(get('detected').textContent, '—');
+  game.stop(); assert.equal(state(), 'stopped');
 });
 
-test('retry clears pitch during deferred acquisition and late teardown cannot restore it', async () => {
+test('retry clears audio status during deferred acquisition and late teardown cannot restore it', async () => {
   const d = dom(), b = browser(); Object.assign(d.win, b.win);
   const game = mount(d.win, d.container); await game.begin();
   d.advance(85); b.emit(b.frame(.05), .085);
-  assert.equal(d.nodes.get('.fr-detected').textContent, 'A4');
+  assert.equal(d.nodes.get('.fr-live-status').textContent, 'Listening · waiting for a fresh sample');
   const pending = deferred(); d.win.navigator.mediaDevices.getUserMedia = () => pending.promise;
   const retrying = game.begin();
-  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
+  assert.equal(d.nodes.get('.fr-live-status').textContent, 'Reading setup…');
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'startup');
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'acquiring');
   game.stop(); pending.resolve(b.stream); await retrying;
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'stopped');
-  assert.equal(d.nodes.get('.fr-detected').textContent, '—');
+  assert.equal(d.nodes.get('.fr-live-status').textContent, 'Not listening');
   assert.deepEqual(b.counts(), { stopped: 2, closed: 3 });
 });
 

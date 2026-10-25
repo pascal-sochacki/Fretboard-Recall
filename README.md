@@ -12,11 +12,10 @@ then reload/restart FeedBack. This checkout has not been installed into siblings
 Enable the bundled Minigames framework and Note Detection plugin.
 
 Version **0.2.1** fixes stylesheet delivery. The active-round layout keeps the
-requested note, live detected pitch and requested-string diagram together in a
-compact desktop row; these stack on narrow screens. Detailed round summaries,
-trend charts, heatmaps and the physical-string limitation are grouped under the
-closed-by-default **Round results & progress** disclosure, keeping them available
-without taking space during play.
+requested note, generic audio feedback and requested-string diagram together in a
+compact desktop row; these stack on narrow screens. Progress and detailed round
+results remain hidden throughout setup and active play. Completion reveals and
+opens the results disclosure; starting or restarting hides and closes it again.
 The manifest declares `styles: "assets/game.css"`; keep that file under `assets/`
 when copying the plugin. FeedBack derives `has_styles` from the manifest and
 injects `/api/plugins/fretboard_recall/assets/game.css?v=0.2.1` as a stylesheet.
@@ -68,9 +67,12 @@ analysis window cannot resolve the fundamental at the required callback cadence.
    Use the **Random note + string** checkbox before starting or after a round.
    Each accepted prompt independently selects any of the 12 pitch classes and
    any configured physical string; repeats are allowed. It ends after 5 × the
-   configured string count accepted prompts. Its progress shows prompt count and
-   current string, and its string summary reports observed counts (including
-   strings not selected). Random records are stored separately from standard
+   configured string count accepted prompts. After completion its progress shows
+   prompt count and current string, and its string summary reports observed counts
+   (including strings not selected). Your latest selected mode is saved locally
+   in `fretboard_recall.preferences.v1` and restored on reload, separately from
+   round records; unavailable/corrupt preference storage falls back to standard
+   mode. Random records are stored separately from standard
    records. The mode cannot be changed during a round; Play again/Restart round
    uses the selected mode.
 3. Mute all strings briefly, then pluck the requested string. The next prompt
@@ -89,18 +91,19 @@ by string number. Re-entrant tunings retain physical host mapping order rather
 than sorting by pitch.
 
 The compact responsive active-play UI separates the prominent target pitch class
-from the live detected chromatic note and its reported octave. A physical-string diagram shows
+from generic audio status. Played note names, pitch classes and octaves are never
+shown or announced. A confidently graded wrong note while the silence gate is
+armed displays “Wrong note — try again”; silence, quiet, uncertain input,
+pre-gate audio, correct answers, acquisition, pause and failure retain generic
+status feedback. A physical-string diagram shows
 numbered open notes, highlighting **only the requested string**, never a fret or
 an inferred detected string. The diagram keeps highest-side at the top and
 lowest-side at the bottom; each standard-mode pass starts at the bottom and
-progresses upward. Pass steps (standard mode) and an answer-progress bar track
-the round.
-Live input uses the same callback and level/confidence thresholds as grading:
-held wrong notes remain visible without advancing, while silence, quiet input,
-uncertain pitch, acquisition, pause and failure have explicit text states.
-The last note clears after 350 ms without a callback and on lifecycle resets;
-it is never relabeled as a match to the next prompt. Target changes are politely
-announced; the live note does not flood screen readers with audio-rate updates.
+progresses upward. After a round completes, pass steps (standard mode) and an
+answer-progress bar summarize its progress.
+Live input uses the same callback and level/confidence thresholds as grading;
+wrong notes never advance. Generic input and wrong-note states are exposed to
+assistive technology without audio-rate pitch updates.
 
 Silence requires 180 ms below scaled PCM RMS 0.02, followed by RMS ≥0.04,
 confidence ≥0.70, and ±35 cents of the exact expected octave persisting for
@@ -111,8 +114,9 @@ Adjust host input noise/gain if muting cannot arm; no pitch-verifier miss or
 low-confidence estimate is treated as silence.
 
 Responses are timed from prompt display to acceptance, **including muting**,
-initial device acquisition and DSP/gate latency, excluding pause time. Live
-round/prompt elapsed and progress accompany the prompt. Completion shows total
+initial device acquisition and DSP/gate latency, excluding pause time. Round and
+prompt elapsed display during active play; accepted-answer progress and results
+are revealed only after completion. Completion shows total
 and average per answer. Standard mode reports each string's total/average across
 five responses; random mode reports sampled counts and averages only for strings
 that received answers.
@@ -120,8 +124,9 @@ that received answers.
 Records are only in this browser/device/origin's `localStorage`, key
 `fretboard_recall.records.v1`, grouped by exact instrument/count/ordered
 offsets/reference/indexed open MIDI mapping. Standard mode keeps its existing
-setup key; random-mode entries use that setup key with `:random` appended. Open
-**Round results & progress** after a round to see the personal progress panel,
+setup key; random-mode entries use that setup key with `:random` appended. After
+a completed round the open **Round results & progress** disclosure shows the
+personal progress panel,
 which uses a responsive two-column desktop layout and stacks on narrow screens.
 The round-time trend is a compact chart; open its ordered list to read
 the exact times. It shows all available detailed round-time trends (oldest to
