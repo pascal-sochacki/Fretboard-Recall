@@ -11,7 +11,12 @@ Install this directory as a standard plugin in **your own installation's**
 then reload/restart FeedBack. This checkout has not been installed into siblings.
 Enable the bundled Minigames framework and Note Detection plugin.
 
-Version **0.2.1** fixes stylesheet delivery without changing the UI or game logic.
+Version **0.2.1** fixes stylesheet delivery. The active-round layout keeps the
+requested note, live detected pitch and requested-string diagram together in a
+compact desktop row; these stack on narrow screens. Detailed round summaries,
+trend charts, heatmaps and the physical-string limitation are grouped under the
+closed-by-default **Round results & progress** disclosure, keeping them available
+without taking space during play.
 The manifest declares `styles: "assets/game.css"`; keep that file under `assets/`
 when copying the plugin. FeedBack derives `has_styles` from the manifest and
 injects `/api/plugins/fretboard_recall/assets/game.css?v=0.2.1` as a stylesheet.
@@ -74,7 +79,7 @@ analysis window cannot resolve the fundamental at the required callback cadence.
 4. Pause/Resume excludes paused time and resets the gate. Background tabs pause;
    resume explicitly. Stop/Back or the stage Quit abandons without a record.
    Host tuning changes abandon visibly; Retry starts fresh. Controls and mode
-   selection are placed near setup, above the string diagram.
+   selection are placed near setup, above the active prompt and diagram.
 
 **Microphone/DI pitch cannot verify the physical string when identical pitch
 exists elsewhere.** Honor the requested string yourself. No string detection
@@ -83,8 +88,8 @@ and highest/lowest-side markers. Duplicate open names/pitches remain distinct
 by string number. Re-entrant tunings retain physical host mapping order rather
 than sorting by pitch.
 
-The responsive UI separates the prominent target pitch class from the live
-detected chromatic note and its reported octave. A physical-string diagram shows
+The compact responsive active-play UI separates the prominent target pitch class
+from the live detected chromatic note and its reported octave. A physical-string diagram shows
 numbered open notes, highlighting **only the requested string**, never a fret or
 an inferred detected string. The diagram keeps highest-side at the top and
 lowest-side at the bottom; each standard-mode pass starts at the bottom and
@@ -115,9 +120,10 @@ that received answers.
 Records are only in this browser/device/origin's `localStorage`, key
 `fretboard_recall.records.v1`, grouped by exact instrument/count/ordered
 offsets/reference/indexed open MIDI mapping. Standard mode keeps its existing
-setup key; random-mode entries use that setup key with `:random` appended. The
-progress panel uses a responsive two-column desktop layout and stacks on narrow
-screens. The round-time trend is a compact chart; open its ordered list to read
+setup key; random-mode entries use that setup key with `:random` appended. Open
+**Round results & progress** after a round to see the personal progress panel,
+which uses a responsive two-column desktop layout and stacks on narrow screens.
+The round-time trend is a compact chart; open its ordered list to read
 the exact times. It shows all available detailed round-time trends (oldest to
 newest) and a target-pitch-class
 by physical-string table with average accepted-answer time, attempt count, and

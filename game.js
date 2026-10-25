@@ -345,15 +345,16 @@
       <div class="fr-action-row"><label class="fr-mode"><input type="checkbox" class="fr-random-mode"> Random note + string</label>
       <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause" disabled>Pause</button><button type="button" class="fr-retry">Start round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div></div>
       <div class="fr-round-progress"><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
-      <div class="fr-cards">
-         <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-mute-cue" data-state="idle" role="status" aria-live="polite" aria-atomic="true"><span class="fr-mute-cue-icon" aria-hidden="true"></span><span class="fr-mute-cue-text"></span></p><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
-        <section class="fr-live" aria-label="Live detected note"><p class="fr-eyebrow">Live input · detected note</p><p class="fr-detected">—</p><p class="fr-live-status">Not listening</p><p class="fr-hint">Reported pitch and octave only. Physical string is not detected.</p></section>
+      <div class="fr-active-grid">
+        <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-mute-cue" data-state="idle" role="status" aria-live="polite" aria-atomic="true"><span class="fr-mute-cue-icon" aria-hidden="true"></span><span class="fr-mute-cue-text"></span></p><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Play the requested physical string; pitch detection cannot verify which string you play. Frets 0–11.</p></section>
+        <section class="fr-live" aria-label="Live detected note"><p class="fr-eyebrow">Live input · detected note</p><p class="fr-detected">—</p><p class="fr-live-status">Not listening</p><p class="fr-hint">Reported pitch and octave only.</p></section>
+        <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side · string <span class="fr-string-count"></span></p></section>
       </div>
-       <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
-      <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
-      <div class="fr-summary"></div>
-      <section class="fr-history" aria-labelledby="fr-history-title"><h3 id="fr-history-title">Progress for this exact setup</h3><p class="fr-history-note">Saved on this browser/device only. Trends use accepted target answers and round time; the microphone does not identify a physical string or log incorrect notes.</p><p class="fr-history-status" role="status"></p><div class="fr-history-trend"></div><div class="fr-history-heatmap"></div><div class="fr-history-worst"></div></section>
-      <p class="fr-warning">Play only the requested string within frets 0–11. Microphone/DI pitch cannot verify the physical string when the same pitch exists elsewhere. Use the requested string yourself. No string detection is claimed.</p>
+       <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
+       <details class="fr-results"><summary>Round results &amp; progress</summary><div class="fr-results-content"><div class="fr-summary"></div>
+         <section class="fr-history" aria-labelledby="fr-history-title"><h3 id="fr-history-title">Progress for this exact setup</h3><p class="fr-history-note">Saved on this browser/device only. Trends use accepted target answers and round time; the microphone does not identify a physical string or log incorrect notes.</p><p class="fr-history-status" role="status"></p><div class="fr-history-trend"></div><div class="fr-history-heatmap"></div><div class="fr-history-worst"></div></section>
+         <p class="fr-warning">Microphone/DI pitch cannot verify which physical string produced a note shared by multiple strings. Honor the requested string; no string detection is claimed.</p>
+       </div></details>
     </section>`;
     const el = name => container.querySelector(`.fr-${name}`);
     const elements = new Map();
@@ -508,6 +509,7 @@
         return { row, instruction };
       });
       cached('strings').replaceChildren(...stringRows.map(s => s.row));
+      text('string-count', String(setup.stringCount));
       passSteps = Array.from({ length: 5 }, (_, i) => {
         const step = doc.createElement('span'); step.className = 'fr-pass'; step.textContent = `${i + 1}`; return step;
       });
@@ -732,6 +734,7 @@
       text('status', 'Reading current FeedBack instrument and tuning…');
       text('note', ''); text('string', ''); text('clock', ''); text('progress', '');
       el('summary').replaceChildren(); el('pause').disabled = true;
+      el('results').open = false;
       const gen = generation;
       try {
         if (!host?.workingTuning?.get || !host?.on || !host?.off || !host?.navigate || !quit) throw new Error('Required FeedBack host lifecycle/settings APIs unavailable. Update FeedBack.');

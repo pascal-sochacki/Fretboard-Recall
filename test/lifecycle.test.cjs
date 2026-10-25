@@ -225,6 +225,7 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(d.nodes.get('.fr-completion').value, 30);
   assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
+  assert.equal(d.nodes.get('.fr-results').open, false);
   assert.match(d.nodes.get('.fr-history-status').textContent, /1 completed rounds.*showing up to the latest 100/);
   const trend = d.nodes.get('.fr-history-trend');
   assert.equal(trend.children[1].attributes.role, 'img');
@@ -248,12 +249,24 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   assert.deepEqual(b.counts(), { stopped: 1, closed: 2 }); game.stop(); assert.equal(d.timers.size, 0);
 });
-test('responsive layout uses desktop columns, mobile stacking, and compact scrollable history charts', () => {
+test('results are in one closed, native disclosure and active play uses compact desktop columns', () => {
+  const d = dom(), game = mount(d.win, d.container);
+  assert.match(d.container.innerHTML, /<details class="fr-results"><summary>Round results &amp; progress<\/summary>/);
+  assert.doesNotMatch(d.container.innerHTML.match(/<details class="fr-results">([^]*?)<\/details>/)[0].split('>')[0], /\sopen(?:\s|>)/);
+  assert.match(d.container.innerHTML, /class="fr-results-content"><div class="fr-summary"><\/div>[\s\S]*fr-history[\s\S]*fr-warning/);
+  game.stop();
   const css = fs.readFileSync(require.resolve('../assets/game.css'), 'utf8');
-  assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/);
-  assert.match(css, /"diagram feedback"/);
-  assert.match(css, /"history summary"/);
-  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(css, /\.fr-active-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.1fr\) minmax\(0, \.85fr\) minmax\(250px, 1fr\)/);
+  assert.match(css, /\.fr-string-row\s*\{[^}]*min-height:\s*25px/);
+  assert.match(css, /\.fr-game\s*\{[^}]*padding:\s*clamp\(12px, 2vw, 22px\)/);
+  assert.match(css, /\.fr-results > summary\s*\{[^}]*cursor:\s*pointer/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.fr-active-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(css, /\.fr-heatmap-wrap\s*\{\s*overflow-x:\s*auto;/);
+  assert.match(css, /\.fr-trend-chart\s*\{[^}]*height:\s*44px/);
+  assert.match(css, /\.fr-trend-details summary\s*\{\s*cursor:\s*pointer;/);
+});
+test('responsive history charts remain compact and horizontally scrollable', () => {
+  const css = fs.readFileSync(require.resolve('../assets/game.css'), 'utf8');
   assert.match(css, /\.fr-heatmap-wrap\s*\{\s*overflow-x:\s*auto;/);
   assert.match(css, /\.fr-trend-chart\s*\{[^}]*height:\s*44px/);
   assert.match(css, /\.fr-trend-details summary\s*\{\s*cursor:\s*pointer;/);
