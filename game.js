@@ -3,6 +3,7 @@
   'use strict';
 
   const NATURAL_NAMES = ['C', null, 'D', null, 'E', 'F', null, 'G', null, 'A', null, 'B'];
+  const NAMES = ['C', 'C♯ / D♭', 'D', 'D♯ / E♭', 'E', 'F', 'F♯ / G♭', 'G', 'G♯ / A♭', 'A', 'A♯ / B♭', 'B'];
   const ACCIDENTAL_NAMES = {
     1: ['C♯', 'D♭'], 3: ['D♯', 'E♭'], 6: ['F♯', 'G♭'],
     8: ['G♯', 'A♭'], 10: ['A♯', 'B♭'],
@@ -115,7 +116,8 @@
       if (!match) { this.correctAt = null; return false; }
       if (this.correctAt === null) this.correctAt = now;
       if (now - this.correctAt < HOLD_MS) return false;
-      this.answers.push({ stringIndex: this.target().index, durationMs: this.elapsed - this.promptAt });
+      const target = this.target();
+      this.answers.push({ stringIndex: target.index, pitch: mod(target.pitch), durationMs: this.elapsed - this.promptAt });
       if (this.mode === 'random') {
         if (this.answers.length === 5 * this.setup.stringCount) this.done = true;
         else { this.chooseRandomPrompt(); this.updatePromptSpelling(); }
@@ -141,6 +143,7 @@
       return {
         completedAt: new Date().toISOString(), totalMs,
         averageMs: totalMs / this.answers.length,
+        answers: this.answers.map(answer => ({ ...answer })),
         strings: this.setup.strings.map(s => {
           const answers = this.answers.filter(a => a.stringIndex === s.index);
           const totalMs = answers.reduce((sum, a) => sum + a.durationMs, 0);
@@ -151,14 +154,45 @@
     }
   }
 
+  function validRecord(record, setup) {
+    if (!record || !Number.isSafeInteger(record.completed) || record.completed < 0 || !Number.isFinite(record.bestMs) || record.bestMs < 0 || !record.latest || typeof record.latest !== 'object') return false;
+    if (record.runs === undefined) return true;
+    if (!Array.isArray(record.runs) || record.runs.length > 100 || record.runs.length > record.completed) return false;
+    return record.runs.every(run => {
+      if (!run || typeof run.completedAt !== 'string' || !Number.isFinite(Date.parse(run.completedAt)) || !Number.isFinite(run.totalMs) || run.totalMs < 0 || !Number.isFinite(run.averageMs) || !Array.isArray(run.answers) || run.answers.length !== setup.stringCount * 5) return false;
+      let totalMs = 0;
+      for (const answer of run.answers) {
+        if (!answer || !Number.isInteger(answer.pitch) || answer.pitch < 0 || answer.pitch >= 12 || !Number.isInteger(answer.stringIndex) || !setup.strings.some(string => string.index === answer.stringIndex) || !Number.isFinite(answer.durationMs) || answer.durationMs < 0) return false;
+        totalMs += answer.durationMs;
+      }
+      const tolerance = Math.max(1e-6, Math.abs(run.totalMs) * 1e-9);
+      return Math.abs(totalMs - run.totalMs) <= tolerance && Math.abs(run.averageMs - run.totalMs / run.answers.length) <= Math.max(1e-6, Math.abs(run.averageMs) * 1e-9);
+    });
+  }
+
+  function readRecord(storage, setup, mode = 'standard') {
+    const records = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
+    if (!records || typeof records !== 'object' || Array.isArray(records)) throw new Error('Invalid local records.');
+    const key = mode === 'random' ? `${setup.key}${RANDOM_RECORD_SUFFIX}` : setup.key;
+    const record = records[key];
+    if (record && !validRecord(record, setup)) throw new Error('Invalid local record for this setup.');
+    return record ? { ...record, runs: record.runs || [] } : { completed: 0, runs: [] };
+  }
+
   function storeRecord(storage, setup, result, mode = 'standard') {
     let records = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
     if (!records || typeof records !== 'object' || Array.isArray(records)) throw new Error('Invalid local records.');
     if (!['standard', 'random'].includes(mode)) throw new Error('Invalid round mode.');
     const key = mode === 'random' ? `${setup.key}${RANDOM_RECORD_SUFFIX}` : setup.key;
     const old = records[key];
-    const valid = old && Number.isInteger(old.completed) && old.completed >= 0 && Number.isFinite(old.bestMs) && old.bestMs >= 0;
-    records[key] = { setup, ...(mode === 'random' ? { mode } : {}), completed: (valid ? old.completed : 0) + 1, bestMs: valid ? Math.min(old.bestMs, result.totalMs) : result.totalMs, latest: result };
+    if (old && !validRecord(old, setup)) throw new Error('Invalid local record for this setup.');
+    if (!Array.isArray(result.answers) || result.answers.length !== setup.stringCount * 5) throw new Error('Incomplete detailed round.');
+    const completed = (old?.completed || 0) + 1;
+    const run = { completedAt: result.completedAt, totalMs: result.totalMs, averageMs: result.averageMs, answers: result.answers.map(answer => ({ stringIndex: answer.stringIndex, pitch: answer.pitch, durationMs: answer.durationMs })) };
+    const runs = [...(old?.runs || []), run].slice(-100);
+    const next = { ...(old || {}), setup, ...(mode === 'random' ? { mode } : {}), completed, bestMs: old ? Math.min(old.bestMs, result.totalMs) : result.totalMs, latest: result, runs };
+    if (!validRecord(next, setup)) throw new Error('Invalid completed round data.');
+    records[key] = next;
     storage.setItem(STORAGE_KEY, JSON.stringify(records));
     return records[key];
   }
@@ -287,7 +321,7 @@
     return Math.min(1, Math.sqrt(sum / samples.length) * 5);
   }
 
-  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, storeRecord, scaledRms, resolveDesktopInput, openBrowser, mount };
+  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, readRecord, storeRecord, scaledRms, resolveDesktopInput, openBrowser, mount };
   if (typeof module !== 'undefined' && module.exports) { module.exports = logic; return; }
   if (root.__fretboardRecallLoaded) return;
   root.__fretboardRecallLoaded = true;
@@ -318,6 +352,7 @@
        <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
       <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
       <div class="fr-summary"></div>
+      <section class="fr-history" aria-labelledby="fr-history-title"><h3 id="fr-history-title">Progress for this exact setup</h3><p class="fr-history-note">Saved on this browser/device only. Trends use accepted target answers and round time; the microphone does not identify a physical string or log incorrect notes.</p><p class="fr-history-status" role="status"></p><div class="fr-history-trend"></div><div class="fr-history-heatmap"></div><div class="fr-history-worst"></div></section>
       <p class="fr-warning">Play only the requested string within frets 0–11. Microphone/DI pitch cannot verify the physical string when the same pitch exists elsewhere. Use the requested string yourself. No string detection is claimed.</p>
     </section>`;
     const el = name => container.querySelector(`.fr-${name}`);
@@ -407,7 +442,7 @@
       text('retry', error ? 'Retry' : round?.done ? 'Play again' : starting ? 'Starting…' : round ? 'Restart round' : 'Start round');
       el('retry').disabled = starting;
     }
-    el('random-mode').onchange = updateControls;
+    el('random-mode').onchange = () => { updateControls(); if (setup) renderHistory(); };
     function setLive(state, note = '—') {
       if (liveState === state && liveNote === note) return;
       const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet for pitch detection', uncertain: 'Uncertain pitch · play one clear note', detected: 'Pitch detected · reported octave', paused: 'Paused · input display cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio · last pitch cleared' };
@@ -458,6 +493,97 @@
       });
       cached('passes').replaceChildren(...passSteps);
       cached('completion').max = 5 * setup.stringCount;
+      renderHistory();
+    }
+    function node(tag, className, value) {
+      const item = doc.createElement(tag);
+      if (className) item.className = className;
+      if (value !== undefined) item.textContent = value;
+      return item;
+    }
+    function renderHistory() {
+      const status = cached('history-status'), trend = cached('history-trend'), heatmap = cached('history-heatmap'), worst = cached('history-worst');
+      trend.replaceChildren(); heatmap.replaceChildren(); worst.replaceChildren();
+      let record;
+      const mode = round && !round.done ? round.mode : el('random-mode').checked ? 'random' : 'standard';
+      try { record = readRecord(win.localStorage, setup, mode); }
+      catch (_) { status.textContent = 'Saved progress could not be read (storage unavailable or corrupted). Existing records were not changed.'; return; }
+      status.textContent = record.runs.length ? `${record.completed} completed rounds · personal best ${seconds(record.bestMs)} · showing up to the latest 100 detailed rounds. Older aggregate totals are retained; older answer details are not available.` : record.completed ? `${record.completed} older round${record.completed === 1 ? '' : 's'} saved · best ${seconds(record.bestMs)}. Detailed charts start with your next completed round.` : 'No saved rounds for this exact setup yet.';
+      if (!record.runs.length) return;
+
+      const heading = node('h4', '', 'Round time trend · oldest to newest');
+      trend.appendChild(heading);
+      const list = node('ol', 'fr-trend');
+      const maxMs = Math.max(...record.runs.map(run => run.totalMs), 1);
+      record.runs.forEach((run, index) => {
+        const item = node('li', 'fr-trend-item');
+        const date = new Date(run.completedAt);
+        const roundNumber = record.completed - record.runs.length + index + 1;
+        const label = Number.isNaN(date.getTime()) ? `Round ${roundNumber}` : `Round ${roundNumber} · ${date.toLocaleDateString()}`;
+        const time = node('span', 'fr-trend-label', `${label}: ${seconds(run.totalMs)}`);
+        const bar = node('span', 'fr-trend-bar');
+        bar.setAttribute('aria-hidden', 'true'); bar.style.setProperty('--fr-bar-width', `${Math.max(2, run.totalMs / maxMs * 100)}%`);
+        item.appendChild(time); item.appendChild(bar); list.appendChild(item);
+      });
+      trend.appendChild(list);
+
+      heatmap.appendChild(node('h4', '', 'Target pitch class by physical string'));
+      heatmap.appendChild(node('p', 'fr-history-note', 'Each cell shows average accepted-answer time, attempt count, and the slowest recent accepted answer. Rows are string 1 (highest-side) through the lowest-side; columns are target pitch classes, not detected string identities.'));
+      heatmap.appendChild(node('p', 'fr-history-note', 'Intensity levels compare populated cells in this heatmap: level 1 is faster and level 4 is slower. Higher intensity means a higher average response time; the level and time are written in each cell, so color is not the only indicator.'));
+      const table = node('table', 'fr-heatmap');
+      table.appendChild(node('caption', '', 'Average accepted-answer times by physical string and target pitch class'));
+      const head = node('thead'), headerRow = node('tr');
+      const physicalHeader = node('th', '', 'Physical string'); physicalHeader.setAttribute('scope', 'col'); headerRow.appendChild(physicalHeader);
+      NAMES.forEach(name => { const header = node('th', '', name); header.setAttribute('scope', 'col'); headerRow.appendChild(header); });
+      head.appendChild(headerRow); table.appendChild(head);
+      const body = node('tbody');
+      const allAnswers = record.runs.flatMap((run, runIndex) => run.answers.map(answer => ({ ...answer, runIndex })));
+      const aggregates = new Map();
+      allAnswers.forEach(answer => {
+        const key = `${answer.stringIndex},${answer.pitch}`;
+        let aggregate = aggregates.get(key);
+        if (!aggregate) {
+          aggregate = { totalMs: 0, count: 0, slowestMs: 0 };
+          aggregates.set(key, aggregate);
+        }
+        aggregate.totalMs += answer.durationMs;
+        aggregate.count++;
+        aggregate.slowestMs = Math.max(aggregate.slowestMs, answer.durationMs);
+      });
+      const averages = [...aggregates.values()].map(aggregate => aggregate.totalMs / aggregate.count);
+      const minAverage = Math.min(...averages), maxAverage = Math.max(...averages);
+      const intensity = average => maxAverage === minAverage ? 1 : Math.min(4, Math.floor((average - minAverage) / (maxAverage - minAverage) * 4) + 1);
+      const rows = setup.strings.slice().sort((a, b) => (setup.stringCount - a.index) - (setup.stringCount - b.index));
+      rows.forEach(string => {
+        const row = node('tr');
+        const rowHeader = node('th', '', `String ${setup.stringCount - string.index}${setup.stringCount - string.index === 1 ? ' · highest-side' : setup.stringCount - string.index === setup.stringCount ? ' · lowest-side' : ''}`);
+        rowHeader.setAttribute('scope', 'row'); row.appendChild(rowHeader);
+        NAMES.forEach((name, pitch) => {
+          const cell = node('td');
+          const aggregate = aggregates.get(`${string.index},${pitch}`);
+          if (aggregate) {
+            const average = aggregate.totalMs / aggregate.count;
+            const level = intensity(average);
+            cell.textContent = `Avg ${seconds(average)} · ${aggregate.count} ${aggregate.count === 1 ? 'answer' : 'answers'} · slowest recent ${seconds(aggregate.slowestMs)} · intensity ${level}/4${level === 4 ? ' (slower)' : ''}`;
+            cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: average ${seconds(average)}, ${aggregate.count} accepted answers, slowest recent ${seconds(aggregate.slowestMs)}, intensity ${level} of 4${level === 4 ? ', slower' : ''}`);
+            cell.setAttribute('data-attempts', aggregate.count);
+            cell.setAttribute('data-intensity', level);
+          } else { cell.textContent = 'No data'; cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: no saved answers`); }
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      const scroll = node('div', 'fr-heatmap-wrap'); scroll.appendChild(table); heatmap.appendChild(scroll);
+
+      const slowest = allAnswers.slice().sort((a, b) => b.durationMs - a.durationMs).slice(0, 5);
+      worst.appendChild(node('h4', '', 'Slowest recent accepted answers'));
+      const details = node('ol');
+      slowest.forEach(answer => {
+        const roundIndex = record.completed - record.runs.length + answer.runIndex + 1;
+        details.appendChild(node('li', '', `Round ${roundIndex} · ${NAMES[answer.pitch]} · String ${setup.stringCount - answer.stringIndex} · ${seconds(answer.durationMs)}`));
+      });
+      worst.appendChild(details);
     }
     function renderProgress() {
       cached('completion').value = round.answers.length;
@@ -527,7 +653,8 @@
       try {
         const record = storeRecord(win.localStorage, setup, result, round.mode);
         text('status', `Saved only on this browser/device. ${record.completed} completed rounds for this exact setup · Personal best ${seconds(record.bestMs)}. No XP or public submission.`);
-      } catch (_) { text('status', 'Round completed, but local records could not be saved (storage unavailable or corrupted). No public submission.'); }
+        renderHistory();
+      } catch (_) { text('status', 'Round completed, but local records could not be saved (storage unavailable or corrupted). Existing records were not changed; no public submission.'); }
       updateControls();
     }
     function sample(value) {

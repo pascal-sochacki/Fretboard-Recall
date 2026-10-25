@@ -113,13 +113,31 @@ five responses; random mode reports sampled counts and averages only for strings
 that received answers.
 
 Records are only in this browser/device/origin's `localStorage`, key
-`fretboard_recall.records.v1`: completed count, personal best total and latest
-summary, grouped by exact instrument/count/ordered offsets/reference/indexed
-open MIDI mapping. Standard mode keeps its existing setup key; random-mode
-entries use that setup key with `:random` appended. Abandonment does not save.
-Storage failure is visible.
-No cloud account, export, public submission or synchronization. Clearing site
-storage removes records.
+`fretboard_recall.records.v1`, grouped by exact instrument/count/ordered
+offsets/reference/indexed open MIDI mapping. Standard mode keeps its existing
+setup key; random-mode entries use that setup key with `:random` appended. The
+progress panel shows all
+available detailed round-time trends (oldest to newest) and a target-pitch-class
+by physical-string table with average accepted-answer time, attempt count, and
+slowest recent answer. Populated heatmap cells are grouped into four relative
+average-time intensity levels for the current heatmap: level 1 is faster and
+level 4 is slower. Every cell includes its numeric average, attempt count,
+slowest time, and written intensity level; higher intensity means slower
+accepted responses, and color is not the only indicator. A ranked list also
+highlights the slowest five answers.
+The textual table and labels carry the same information without relying on
+color or hover. “String” here is the requested physical string mapping; input
+pitch cannot verify which string was played, and incorrect notes are not
+recorded or counted. Times are prompt-to-acceptance durations, including mute
+and detection latency.
+
+New detailed history begins with the next completed round. Older installs keep
+their completed count, personal best and latest summary, but do not get
+backfilled chart data. Up to the latest 100 detailed rounds are retained per
+mode and exact setup. Abandonment does not save. Storage read/write failure is
+visible, and malformed history is not intentionally overwritten. No cloud
+account, export, public submission or synchronization. Clearing site storage
+removes records.
 
 ## Source-supported API decisions and review fixes
 

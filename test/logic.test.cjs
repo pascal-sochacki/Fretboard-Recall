@@ -15,10 +15,14 @@ function setup(instrument = 'guitar', stringCount = 6, offsets = Array(stringCou
   return snapshotSetup({ instrument, stringCount, offsets, referencePitch }, tunings);
 }
 function accept(r, time) {
+  const target = r.target();
   for (let t = time; t <= time + 200; t += 20) { r.tick(20); r.sample({ level: 0, midi: null, confidence: 0 }, t); }
   for (let t = time + 220; t <= time + 360; t += 20) {
     r.tick(20);
-    if (r.sample({ level: .2, midi: r.target().midi, confidence: .95 }, t)) return t;
+    if (r.sample({ level: .2, midi: r.target().midi, confidence: .95 }, t)) {
+      assert.deepEqual(r.answers.at(-1), { stringIndex: target.index, pitch: target.pitch, durationMs: r.answers.at(-1).durationMs });
+      return t;
+    }
   }
   throw new Error('Answer did not accept');
 }
@@ -214,21 +218,50 @@ test('pause excludes time and clears silence/hit state without skipping', () => 
   r.pause(false); assert.equal(r.armed, false); assert.equal(r.answers.length, 0);
   assert.throws(() => r.summary());
 });
-test('local records save only supplied completed summaries grouped by exact setup', () => {
+test('local records migrate aggregate-only history and retain latest 100 detailed rounds', () => {
   const map = new Map(); const storage = { getItem: k => map.get(k), setItem: (k, v) => map.set(k, v) };
   const a = setup(), b = setup('bass', 4);
-  assert.equal(storeRecord(storage, a, { totalMs: 200 }).completed, 1);
-  assert.equal(storeRecord(storage, a, { totalMs: 300 }).bestMs, 200);
-  assert.equal(storeRecord(storage, a, { totalMs: 100 }).bestMs, 100);
-  assert.equal(storeRecord(storage, b, { totalMs: 500 }).completed, 1);
-  assert.equal(storeRecord(storage, a, { totalMs: 700 }, 'random').completed, 1);
-  assert.equal(storeRecord(storage, a, { totalMs: 600 }, 'random').bestMs, 600);
-  assert.equal(storeRecord(storage, a, { totalMs: 150 }).completed, 4);
-  const stored = JSON.parse(map.values().next().value);
+  const makeAnswers = (durationMs, stringCount = a.stringCount) => Array.from({ length: stringCount * 5 }, (_, i) => ({ stringIndex: i % stringCount, pitch: i % 12, durationMs }));
+  const run = (totalMs, stringCount = a.stringCount) => {
+    const runAnswers = makeAnswers(totalMs / (stringCount * 5), stringCount);
+    return { completedAt: new Date().toISOString(), totalMs, averageMs: totalMs / runAnswers.length, answers: runAnswers };
+  };
+  map.set('fretboard_recall.records.v1', JSON.stringify({ [a.key]: { setup: a, completed: 7, bestMs: 200, latest: { totalMs: 200 } } }));
+  const legacy = require('../game.js').readRecord(storage, a);
+  assert.equal(legacy.completed, 7); assert.equal(legacy.runs.length, 0);
+  const migrated = storeRecord(storage, a, run(300));
+  assert.equal(migrated.completed, 8); assert.equal(migrated.bestMs, 200); assert.equal(migrated.runs.length, 1);
+  for (let i = 0; i < 105; i++) storeRecord(storage, a, run(400 + i));
+  const history = require('../game.js').readRecord(storage, a);
+  assert.equal(history.completed, 113); assert.equal(history.runs.length, 100);
+  assert.equal(history.runs[0].totalMs, 405); assert.equal(history.runs.at(-1).totalMs, 504);
+  assert.equal(storeRecord(storage, b, run(2400, b.stringCount)).completed, 1);
+  const randomOne = storeRecord(storage, a, run(700), 'random');
+  const randomTwo = storeRecord(storage, a, run(600), 'random');
+  assert.equal(randomOne.completed, 1); assert.equal(randomTwo.bestMs, 600);
+  assert.equal(require('../game.js').readRecord(storage, a, 'random').runs.length, 2);
+  const stored = JSON.parse(map.get('fretboard_recall.records.v1'));
+  assert.equal(stored[a.key].completed, 113);
   assert.equal(stored[`${a.key}:random`].completed, 2);
-  assert.equal(stored[a.key].completed, 4);
   assert.equal(Object.hasOwn(stored[a.key], 'mode'), false);
   assert.throws(() => storeRecord({ getItem: () => '{' }, a, { totalMs: 1 }));
+  assert.throws(() => storeRecord(storage, a, { totalMs: 1 }));
+  const corrupt = { getItem: () => JSON.stringify({ [a.key]: { completed: 1, bestMs: 1, latest: {}, runs: [{ answers: [] }] } }) };
+  assert.throws(() => require('../game.js').readRecord(corrupt, a));
+});
+test('local record validation rejects inconsistent detailed counts, totals, and run numbering', () => {
+  const a = setup();
+  const answers = Array.from({ length: a.stringCount * 5 }, (_, i) => ({ stringIndex: i % a.stringCount, pitch: i % 12, durationMs: 20 }));
+  const validRun = { completedAt: new Date().toISOString(), totalMs: 600, averageMs: 20, answers };
+  const read = record => require('../game.js').readRecord({ getItem: () => JSON.stringify({ [a.key]: record }) }, a);
+  const record = runs => ({ completed: 1, bestMs: 600, latest: { totalMs: 600 }, runs });
+  assert.equal(read(record([validRun])).runs.length, 1);
+  assert.throws(() => read(record([{ ...validRun, answers: answers.slice(1) }])));
+  assert.throws(() => read(record([{ ...validRun, totalMs: 601 }])));
+  assert.throws(() => read(record([{ ...validRun, averageMs: Infinity }])));
+  assert.throws(() => read(record([{ ...validRun, completedAt: 'not a date' }])));
+  assert.throws(() => read(record([validRun, validRun])));
+  assert.throws(() => read({ ...record([validRun]), completed: 0 }));
 });
 test('RMS meters raw signal without DSP or held pitch as a silence proxy', () => {
   assert.equal(scaledRms(new Float32Array(20)), 0);

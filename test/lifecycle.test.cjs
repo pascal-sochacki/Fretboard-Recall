@@ -223,6 +223,16 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.equal(d.nodes.get('.fr-completion').value, 30);
   assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
+  assert.match(d.nodes.get('.fr-history-status').textContent, /1 completed rounds.*showing up to the latest 100/);
+  assert.equal(d.nodes.get('.fr-history-trend').children[1].children.length, 1);
+  const heatmap = d.nodes.get('.fr-history-heatmap').children[3].children[0];
+  assert.equal(heatmap.children[2].children.length, 6);
+  assert.match(heatmap.children[2].children[0].children[0].textContent, /String 1 · highest-side/);
+  assert.match(heatmap.children[2].children[5].children[0].textContent, /String 6 · lowest-side/);
+  assert.ok(heatmap.children[2].children.flatMap(row => row.children).some(cell => /Avg .* · \d+ answers? · slowest recent/.test(cell.textContent)));
+  assert.ok(heatmap.children[2].children.flatMap(row => row.children).some(cell => /intensity [1-4]\/4/.test(cell.textContent)));
+  assert.match(d.nodes.get('.fr-history-heatmap').children[2].textContent, /level 1 is faster and level 4 is slower/);
+  assert.match(d.container.innerHTML, /does not identify a physical string or log incorrect notes/);
   assert.equal(d.nodes.get('.fr-retry').textContent, 'Play again');
   d.nodes.get('.fr-retry').onclick();
   for (let i = 0; i < 10; i++) await Promise.resolve();
@@ -315,6 +325,22 @@ test('blocked automatic reference playback is visible and manual replay recovers
   game.stop();
 });
 
+test('saved exact-setup history appears on startup and empty/legacy states are explicit', async () => {
+  for (const legacy of [false, true, 'detailed']) {
+    const d = dom(), b = browser(); Object.assign(d.win, b.win);
+    const key = JSON.stringify(['guitar', 6, [0, 0, 0, 0, 0, 0], 440, [[5, 64], [4, 59], [3, 55], [2, 50], [1, 45], [0, 40]]]);
+    const answers = Array.from({ length: 30 }, (_, i) => ({ stringIndex: i % 6, pitch: i % 12, durationMs: 20 + i }));
+    const records = legacy ? { [key]: { completed: 4, bestMs: 1200, latest: { totalMs: 1300 }, ...(legacy === 'detailed' ? { runs: [{ completedAt: new Date().toISOString(), totalMs: 1035, averageMs: 34.5, answers }] } : {}) } } : {};
+    d.win.localStorage = { getItem: name => name === 'fretboard_recall.records.v1' ? JSON.stringify(records) : '{"deviceId":"chosen","channel":"mono"}' };
+    const game = mount(d.win, d.container); await game.begin();
+    if (legacy === 'detailed') {
+      assert.match(d.nodes.get('.fr-history-status').textContent, /4 completed rounds.*showing up to the latest 100/);
+      assert.equal(d.nodes.get('.fr-history-trend').children[1].children.length, 1);
+      assert.equal(d.nodes.get('.fr-history-heatmap').children[3].children[0].children[1].children[0].children.length, 13);
+    } else assert.match(d.nodes.get('.fr-history-status').textContent, legacy ? /4 older rounds.*Detailed charts start/ : /No saved rounds for this exact setup/);
+    game.stop();
+  }
+});
 test('desktop mounted startup waits for explicit input confirmation before capture', async () => {
   const d = dom(), b = browser(); const native = desktop(b);
   // Keep the session clock timer separate from capture identity timers.

@@ -50,6 +50,24 @@
 .fr-game .fr-summary { font-size: 14px; font-variant-numeric: tabular-nums; }
 .fr-game .fr-summary:not(:empty) { margin-top: 20px; padding: 16px; border: 1px solid #485b70; border-radius: 12px; }
 .fr-game .fr-summary p + p { margin-top: 8px; }
+.fr-game .fr-history { margin-top: 24px; padding: 18px; border: 1px solid #485b70; border-radius: 14px; background: #152333; }
+.fr-game .fr-history h3, .fr-game .fr-history h4 { color: var(--fr-ink); }
+.fr-game .fr-history h4 { margin: 18px 0 8px; font-size: 15px; }
+.fr-game .fr-history-note, .fr-game .fr-history-status { margin-top: 8px; color: var(--fr-muted); font-size: 13px; }
+.fr-game .fr-trend { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 7px; }
+.fr-game .fr-trend-item { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(80px, 2fr); align-items: center; gap: 12px; }
+.fr-game .fr-trend-label { font-size: 12px; font-variant-numeric: tabular-nums; }
+.fr-game .fr-trend-bar { display: block; width: var(--fr-bar-width); min-width: 3px; height: 12px; border-radius: 99px; background: #a9f0d0; }
+.fr-game .fr-heatmap-wrap { overflow-x: auto; }
+.fr-game .fr-heatmap { width: 100%; margin-top: 12px; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.fr-game .fr-heatmap th, .fr-game .fr-heatmap td { min-width: 78px; padding: 8px 6px; border: 1px solid #405268; text-align: left; vertical-align: top; }
+.fr-game .fr-heatmap thead th { color: var(--fr-accent); }
+.fr-game .fr-heatmap tbody th { min-width: 110px; color: var(--fr-ink); }
+.fr-game .fr-heatmap td[data-attempts][data-intensity="1"] { background: #1c3934; }
+.fr-game .fr-heatmap td[data-attempts][data-intensity="2"] { background: #28513f; }
+.fr-game .fr-heatmap td[data-attempts][data-intensity="3"] { background: #53613b; }
+.fr-game .fr-heatmap td[data-attempts][data-intensity="4"] { background: #75482f; }
+.fr-game .fr-history ol:not(.fr-trend) { padding-left: 22px; color: var(--fr-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .fr-game .fr-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
 .fr-game button { font: inherit; font-size: 14px; font-weight: 650; min-height: 44px; padding: 10px 16px; border: 1px solid #71859e; border-radius: 10px; color: var(--fr-ink); background: #25364b; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
 .fr-game button.fr-retry, .fr-game button.fr-input { background: var(--fr-accent); color: #102a24; border-color: var(--fr-accent); }
@@ -66,6 +84,9 @@
   .fr-game .fr-string-row { grid-template-columns: 22px minmax(12px, 1fr) minmax(76px, auto) 80px; gap: 7px; padding: 6px; }
   .fr-game .fr-string-instruction { font-size: 11px; }
   .fr-game .fr-controls button { flex: 1 1 140px; }
+  .fr-game .fr-history { padding: 14px 10px; }
+  .fr-game .fr-trend-item { grid-template-columns: 1fr; gap: 4px; }
+  .fr-game .fr-heatmap { width: max-content; }
   .fr-game .fr-action-row { align-items: stretch; }
   .fr-game .fr-mode { flex: 1 0 100%; }
 }
