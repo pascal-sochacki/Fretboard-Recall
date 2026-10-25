@@ -397,7 +397,7 @@ test('random preference saves separately and restores across mounts; invalid or 
   const mode = d.nodes.get('.fr-random-mode');
   assert.equal(mode.checked, false);
   mode.checked = true; mode.onchange();
-  assert.deepEqual(JSON.parse(records.get('fretboard_recall.preferences.v1')), { version: 1, randomMode: true });
+   assert.deepEqual(JSON.parse(records.get('fretboard_recall.preferences.v1')), { version: 1, randomMode: true, hardMode: false });
   assert.equal(records.has('fretboard_recall.records.v1'), false);
   game.stop();
 
@@ -422,6 +422,92 @@ test('random preference saves separately and restores across mounts; invalid or 
   unavailable.nodes.get('.fr-random-mode').checked = true;
   assert.doesNotThrow(() => unavailable.nodes.get('.fr-random-mode').onchange());
   session.stop();
+});
+
+test('hard preference migrates random-only v1 settings and persists both independent modes', () => {
+  const saved = new Map([['fretboard_recall.preferences.v1', '{"version":1,"randomMode":true}']]);
+  const storage = { getItem: key => saved.get(key) ?? null, setItem: (key, value) => saved.set(key, value) };
+  const d = dom(); d.win.localStorage = storage;
+  const game = mount(d.win, d.container);
+  assert.equal(d.nodes.get('.fr-random-mode').checked, true);
+  assert.equal(d.nodes.get('.fr-hard-mode').checked, false);
+  d.nodes.get('.fr-hard-mode').checked = true;
+  d.nodes.get('.fr-hard-mode').onchange();
+  assert.deepEqual(JSON.parse(saved.get('fretboard_recall.preferences.v1')), { version: 1, randomMode: true, hardMode: true });
+  game.stop();
+  const next = dom(); next.win.localStorage = storage;
+  const restored = mount(next.win, next.container);
+  assert.equal(next.nodes.get('.fr-random-mode').checked, true);
+  assert.equal(next.nodes.get('.fr-hard-mode').checked, true);
+  restored.stop();
+});
+
+test('hard UI exposes wrong count, advances once per muted mistake, completes at 30 correct, and restarts cleanly', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  let time = 0, midi = 48;
+  d.win._ndYinDetect = () => ({ freq: 440 * 2 ** ((midi - 69) / 12), confidence: 1 });
+  const records = new Map();
+  d.win.localStorage = { getItem: key => key === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : records.get(key), setItem: (key, value) => records.set(key, value) };
+  const game = mount(d.win, d.container, () => .01);
+  const get = name => d.nodes.get(`.fr-${name}`);
+  get('hard-mode').checked = true; get('hard-mode').onchange();
+  await game.begin();
+  assert.equal(get('badge').textContent, 'Hard · 30 correct · Local records');
+  assert.equal(get('passes').hidden, true);
+  assert.match(get('progress').textContent, /0 \/ 30 correct · current string 6 · 0 wrong/);
+  assert.equal(get('round-progress').hidden, false);
+  const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
+  const arm = () => { for (let i = 0; i < 4; i++) emit(0); };
+  const pitchForPrompt = () => {
+    const aliases = { 'C♯ / D♭': 1, 'D♯ / E♭': 3, 'F♯ / G♭': 6, 'G♯ / A♭': 8, 'A♯ / B♭': 10 };
+    const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+    const spelling = get('note').textContent;
+    const pitch = aliases[spelling] ?? names.indexOf(spelling);
+    const stringNumber = +get('string').textContent.match(/String (\d)/)[1];
+    const open = [64, 59, 55, 50, 45, 40][stringNumber - 1];
+    return open + ((pitch - open) % 12 + 12) % 12;
+  };
+  const firstPrompt = `${get('note').textContent}/${get('string').textContent}`;
+  arm(); midi = pitchForPrompt() + 1;
+  for (let i = 0; i < 3; i++) emit(.05);
+  assert.match(get('progress').textContent, /0 \/ 30 correct.*1 wrong/);
+  assert.equal(get('wrong-count-active').textContent, 'Wrong notes: 1');
+  assert.equal(get('status').textContent, 'Wrong note — next target. Mute all strings before playing again.');
+  const afterMistake = `${get('note').textContent}/${get('string').textContent}`;
+  for (let i = 0; i < 8; i++) emit(.05);
+  assert.equal(get('wrong-count-active').textContent, 'Wrong notes: 1', 'held wrong note is not callback spam');
+  assert.notEqual(afterMistake, firstPrompt);
+
+  for (let answer = 0; answer < 30; answer++) {
+    arm(); midi = pitchForPrompt();
+    for (let i = 0; i < 3; i++) emit(.05);
+    if (answer < 29) assert.match(get('progress').textContent, new RegExp(`${answer + 1} / 30 correct`));
+  }
+  assert.match(get('progress').textContent, /exactly 30 correct · 1 wrong/);
+  assert.match(get('round-total').textContent, /Wrong notes: 1/);
+  assert.equal(get('completion').value, 30);
+  assert.equal(get('summary').children.length, 6);
+  const stored = JSON.parse(records.get('fretboard_recall.records.v1'));
+  assert.equal(stored[`${setup.key}:hard`].latest.wrongCount, 1);
+  assert.equal(stored[setup.key], undefined);
+  const completedResult = structuredClone(stored[`${setup.key}:hard`].latest);
+  get('hard-mode').checked = false; get('hard-mode').onchange();
+  assert.equal(get('badge').textContent, '5 passes · Local records');
+  assert.equal(get('history-status').textContent, 'No saved rounds for this exact setup yet.');
+  get('random-mode').checked = true; get('random-mode').onchange();
+  assert.equal(get('badge').textContent, 'Random · Local records');
+  assert.equal(get('history-status').textContent, 'No saved rounds for this exact setup yet.');
+  get('hard-mode').checked = true; get('hard-mode').onchange();
+  assert.equal(get('badge').textContent, 'Hard · 30 correct · Local records');
+  assert.equal(get('history-status').textContent, 'No saved rounds for this exact setup yet.');
+  get('random-mode').checked = false; get('random-mode').onchange();
+  assert.match(get('history-status').textContent, /^1 completed rounds · personal best /);
+  assert.deepEqual(JSON.parse(records.get('fretboard_recall.records.v1'))[`${setup.key}:hard`].latest, completedResult);
+  get('retry').onclick();
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+  assert.match(get('progress').textContent, /0 \/ 30 correct.*0 wrong/);
+  assert.equal(get('wrong-count-active').textContent, 'Wrong notes: 0');
+  game.stop();
 });
 
 test('requested-string diagram hides open pitches and play again starts a fresh round', async () => {

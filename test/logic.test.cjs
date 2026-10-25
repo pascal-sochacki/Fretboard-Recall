@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { Round: RuntimeRound, snapshotSetup, choosePitch, noteName, midiFrequency, storeRecord, scaledRms } = require('../game.js');
+const { Round: RuntimeRound, snapshotSetup, choosePitch, noteName, midiFrequency, readRecord, storeRecord, scaledRms } = require('../game.js');
 class Round extends RuntimeRound {
   sample(value, now) { return super.sample({ captureTime: now, ...value }, now); }
 }
@@ -196,6 +196,69 @@ test('random mode independently selects repeatable pitch classes and physical st
   assert.ok(result.strings.every(item => item.averageMs === (item.count ? item.totalMs / item.count : null)));
 });
 
+test('hard mode counts wrong-prompt elapsed time in totals while retaining 30 correct answers', () => {
+  const r = new Round(setup('bass', 4), () => .5, { hardMode: true });
+  let now = 0;
+  const send = (level, midi, confidence = 1, dt = 20) => {
+    now += dt; r.tick(dt);
+    return r.sample({ level, midi, confidence, captureTime: now }, now);
+  };
+  const arm = () => { for (let i = 0; i < 10; i++) send(0, null, 0); };
+  const mistake = () => {
+    const target = r.target();
+    for (let i = 0; i < 6; i++) assert.equal(send(.2, target.midi + 1), false);
+    assert.equal(send(.2, target.midi + 1), true);
+    assert.equal(r.lastEvent, 'wrong');
+    assert.equal(r.armed, false);
+    r.displayed();
+    const next = r.target();
+    for (let i = 0; i < 10; i++) assert.equal(send(.2, next.midi + 1), false);
+  };
+  arm(); mistake(); arm(); mistake();
+  assert.equal(r.wrongCount, 2);
+  for (let answer = 0; answer < 30; answer++) {
+    arm();
+    const target = r.target();
+    for (let i = 0; i < 6; i++) assert.equal(send(.2, target.midi), false);
+    assert.equal(send(.2, target.midi), true);
+    assert.equal(r.answers.length, answer + 1);
+    if (!r.done) r.displayed();
+  }
+  assert.equal(r.done, true);
+  const result = r.summary();
+  assert.equal(result.answers.length, 30);
+  assert.equal(result.wrongCount, 2);
+  const correctAnswerMs = result.answers.reduce((sum, answer) => sum + answer.durationMs, 0);
+  assert.ok(result.totalMs > correctAnswerMs);
+  assert.equal(result.strings.reduce((sum, string) => sum + string.totalMs, 0), correctAnswerMs);
+  assert.equal(result.totalMs, r.elapsed);
+  assert.equal(result.averageMs, result.totalMs / 30);
+  assert.equal(r.answers.length, 30);
+
+  const map = new Map();
+  const storage = { getItem: key => map.get(key), setItem: (key, value) => map.set(key, value) };
+  const saved = storeRecord(storage, setup('bass', 4), result, 'hard');
+  assert.equal(saved.completed, 1);
+  assert.equal(readRecord(storage, setup('bass', 4), 'hard').runs[0].totalMs, r.elapsed);
+});
+
+test('hard mistake hold resets for changed pitch, invalidity, callback gaps and pause', () => {
+  const r = new Round(setup(), () => .5, { hardMode: true });
+  let now = 0;
+  const send = (level, midi, confidence = 1, gap = 20) => { now += gap; return r.sample({ level, midi, confidence, captureTime: now }, now); };
+  for (let i = 0; i < 10; i++) send(0, null, 0);
+  const wrong = r.target().midi + 2;
+  send(.2, wrong); send(.2, wrong); send(.2, wrong + 1);
+  assert.equal(r.wrongCount, 0);
+  send(.2, wrong + 1, .69); send(.2, wrong + 1); send(.2, wrong + 1, 1, 130);
+  assert.equal(r.wrongCount, 0);
+  r.pause(true); r.pause(false);
+  for (let i = 0; i < 10; i++) send(0, null, 0);
+  for (let i = 0; i < 6; i++) send(.2, wrong);
+  send(.2, wrong);
+  assert.equal(r.wrongCount, 1);
+});
+
 test('the same string gets a different target pitch on consecutive passes', () => {
   const r = new Round(setup(), () => .5);
   let time = 0;
@@ -260,6 +323,25 @@ test('local record validation rejects inconsistent detailed counts, totals, and 
   assert.throws(() => read(record([{ ...validRun, completedAt: 'not a date' }])));
   assert.throws(() => read(record([validRun, validRun])));
   assert.throws(() => read({ ...record([validRun]), completed: 0 }));
+});
+
+test('hard result records persist aggregate mistakes in independent standard/random lanes', () => {
+  const setupValue = setup('bass', 4);
+  const map = new Map();
+  const storage = { getItem: key => map.get(key), setItem: (key, value) => map.set(key, value) };
+  for (const mode of ['standard', 'random', 'hard', 'random-hard']) {
+    const count = mode.includes('hard') ? 30 : setupValue.stringCount * 5;
+    const answers = Array.from({ length: count }, (_, i) => ({ stringIndex: i % setupValue.stringCount, pitch: i % 12, durationMs: 10 }));
+    const result = { completedAt: new Date().toISOString(), totalMs: count * 10, averageMs: 10, wrongCount: 7, answers };
+    const record = storeRecord(storage, setupValue, result, mode);
+    assert.equal(record.completed, 1);
+    assert.equal(readRecord(storage, setupValue, mode).runs[0].wrongCount, mode.includes('hard') ? 7 : undefined);
+  }
+  const stored = JSON.parse(map.get('fretboard_recall.records.v1'));
+  assert.deepEqual(Object.keys(stored).sort(), [setupValue.key, `${setupValue.key}:hard`, `${setupValue.key}:random`, `${setupValue.key}:random:hard`].sort());
+  assert.equal(readRecord(storage, setupValue, 'hard').runs[0].answers.length, 30);
+  assert.equal(readRecord(storage, setupValue, 'standard').runs.length, 1);
+  assert.throws(() => storeRecord(storage, setupValue, { completedAt: new Date().toISOString(), totalMs: 300, averageMs: 10, answers: Array(30).fill({ stringIndex: 0, pitch: 0, durationMs: 10 }) }, 'hard'));
 });
 test('RMS meters raw signal without DSP or held pitch as a silence proxy', () => {
   assert.equal(scaledRms(new Float32Array(20)), 0);

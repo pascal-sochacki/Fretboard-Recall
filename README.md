@@ -69,20 +69,30 @@ analysis window cannot resolve the fundamental at the required callback cadence.
    high E), within frets **0–11**, in the intended octave. The screen gives only
    note name and string instruction, not the fret, answer hint, reference sound or
    fret locations. Accidentals have dual names.
-   Use the **Random note + string** checkbox before starting or after a round.
+    Use the **Random note + string** checkbox before starting or after a round.
    Each accepted prompt independently selects any of the 12 pitch classes and
    any configured physical string; repeats are allowed. It ends after 5 × the
    configured string count accepted prompts. After completion its progress shows
    prompt count and current string, and its string summary reports observed counts
    (including strings not selected). Your latest selected mode is saved locally
-   in `fretboard_recall.preferences.v1` and restored on reload, separately from
-   round records; unavailable/corrupt preference storage falls back to standard
-   mode. Random records are stored separately from standard
-   records. The mode cannot be changed during a round; Play again/Restart round
-   uses the selected mode.
+    in `fretboard_recall.preferences.v1` and restored on reload, separately from
+    round records; unavailable/corrupt preference storage falls back to standard
+    casual mode. Random records are stored separately from standard records. The
+    independent **Hard mode** checkbox can be combined with either prompt style.
+    Hard rounds continue until exactly **30 correct answers**, regardless of
+    mistakes or the instrument's string count. A confidently detected wrong note
+    that remains stable for 120 ms counts once and advances immediately; the next
+    target still requires a fresh mute gate. Holding the same wrong note cannot
+    count again until silence re-arms the gate. Hard-mode records are partitioned
+    from casual records for both standard and random prompts. Both checkbox
+    preferences are saved locally; older random-only preferences restore with
+    Hard mode off. The mode cannot be changed during a round; Play again/Restart
+    round uses the selected modes.
 3. Mute all strings briefly, then pluck the requested string. The next prompt
    displays immediately on acceptance, but must observe a new mute before
-   arming. Wrong notes never advance or penalize. No skip.
+    arming. In casual mode wrong notes never advance or penalize. In Hard mode a
+    sustained confident wrong note counts as a mistake and advances to the next
+    target, which must pass a fresh mute gate. No skip.
 4. Pause/Resume excludes paused time and resets the gate. Background tabs pause;
    resume explicitly. Stop/Back or the stage Quit abandons without a record.
    Host tuning changes abandon visibly; Retry starts fresh. Controls and mode
@@ -98,7 +108,8 @@ than sorting by pitch.
 The compact responsive active-play UI separates the prominent target pitch class
 from generic audio status. Played note names, pitch classes and octaves are never
 shown or announced. A confidently graded wrong note while the silence gate is
-armed displays “Wrong note — try again”; silence, quiet, uncertain input,
+armed displays “Wrong note — try again” in casual mode and advances in Hard mode;
+silence, quiet, uncertain input,
 pre-gate audio, correct answers, acquisition, pause and failure retain generic
 status feedback. A physical-string diagram shows
 numbered open notes, highlighting **only the requested string**, never a fret or
@@ -106,9 +117,11 @@ an inferred detected string. The diagram keeps highest-side at the top and
 lowest-side at the bottom; each standard-mode pass starts at the bottom and
 progresses upward. After a round completes, pass steps (standard mode) and an
 answer-progress bar summarize its progress.
-Live input uses the same callback and level/confidence thresholds as grading;
-wrong notes never advance. Generic input and wrong-note states are exposed to
-assistive technology without audio-rate pitch updates.
+Live input uses the same callback and level/confidence thresholds as grading.
+Hard mode requires the wrong MIDI estimate to persist for 120 ms, resetting on
+pitch changes, invalid estimates, pause, or callback gaps over 100 ms. Generic
+input and wrong-note states are exposed to assistive technology without audio-rate
+pitch updates.
 
 Silence requires 180 ms below scaled PCM RMS 0.02, followed by RMS ≥0.04,
 confidence ≥0.70, and ±35 cents of the exact expected octave persisting for
@@ -118,18 +131,22 @@ synchronous pitch calculation on **that callback's complete PCM buffer**.
 Adjust host input noise/gain if muting cannot arm; no pitch-verifier miss or
 low-confidence estimate is treated as silence.
 
-Responses are timed from prompt display to acceptance, **including muting**,
+Responses are timed from prompt display to correct acceptance, **including muting**,
 initial device acquisition and DSP/gate latency, excluding pause time. Round and
-prompt elapsed display during active play; accepted-answer progress and results
-are revealed only after completion. Completion shows total
-and average per answer. Standard mode reports each string's total/average across
+prompt elapsed display during active play; casual accepted-answer progress and
+results are revealed only after completion. Hard mode shows the correct-answer
+and wrong-note counts during the run. Completion shows total
+and average per answer. In hard mode, the total and average include time spent on
+wrong-note prompts, while per-string response totals include only correct answers.
+Standard mode reports each string's total/average across
 five responses; random mode reports sampled counts and averages only for strings
 that received answers.
 
 Records are only in this browser/device/origin's `localStorage`, key
 `fretboard_recall.records.v1`, grouped by exact instrument/count/ordered
 offsets/reference/indexed open MIDI mapping. Standard mode keeps its existing
-setup key; random-mode entries use that setup key with `:random` appended. After
+setup key; random-mode entries use that setup key with `:random` appended. Hard
+standard and random records use separate `:hard` and `:random:hard` suffixes. After
 a completed round, the compact visible summary shows total and average time and
 up to five slowest accepted targets from recent detailed runs for the exact
 completed setup and mode. Open **Round results & progress** for the optional
@@ -152,7 +169,8 @@ list also highlights the slowest five answers.
 The textual table and labels carry the same information without relying on
 color or hover. “String” here is the requested string mapping, not a detected
 physical string: input pitch cannot verify which string was played, and
-incorrect notes are not recorded or counted. Times are prompt-to-acceptance
+incorrect notes are not saved as answers; Hard mode stores only the aggregate
+wrong-note count for the run. Times are prompt-to-acceptance
 durations, including mute and detection latency.
 
 New detailed history begins with the next completed round. Older installs keep

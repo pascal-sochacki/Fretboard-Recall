@@ -24,6 +24,8 @@
   const STORAGE_KEY = 'fretboard_recall.records.v1';
   const PREFERENCES_KEY = 'fretboard_recall.preferences.v1';
   const RANDOM_RECORD_SUFFIX = ':random';
+  const HARD_RECORD_SUFFIX = ':hard';
+  const RANDOM_HARD_RECORD_SUFFIX = ':random:hard';
   const midiFrequency = (midi, referencePitch) => referencePitch * 2 ** ((midi - 69) / 12);
 
   function snapshotSetup(state, tunings, random = Math.random) {
@@ -54,16 +56,20 @@
   }
 
   class Round {
-    constructor(setup, random = Math.random, { randomMode = false } = {}) {
+    constructor(setup, random = Math.random, { randomMode = false, hardMode = false } = {}) {
       this.setup = setup;
       this.random = random;
-      this.mode = randomMode ? 'random' : 'standard';
+      this.randomMode = randomMode;
+      this.hardMode = hardMode;
+      this.mode = hardMode ? (randomMode ? 'random-hard' : 'hard') : (randomMode ? 'random' : 'standard');
       this.pass = 0;
       this.string = 0;
-      if (this.mode === 'random') this.chooseRandomPrompt();
+      if (this.randomMode) this.chooseRandomPrompt();
       else this.pitch = choosePitch(null, random);
       this.updatePromptSpelling();
       this.answers = [];
+      this.wrongCount = 0;
+      this.lastEvent = null;
       this.elapsed = 0;
       this.promptAt = 0;
       this.paused = false;
@@ -79,6 +85,8 @@
       this.armed = false;
       this.quietAt = null;
       this.correctAt = null;
+      this.wrongAt = null;
+      this.wrongPitch = null;
       this.lastSample = null;
     }
     target() {
@@ -101,40 +109,62 @@
       if (!Number.isFinite(level) || level < 0 || level > 1) { this.resetGate(); return false; }
       if (this.lastSample !== null && now - this.lastSample > MAX_GAP_MS) this.resetGate();
       this.lastSample = now;
+      this.lastEvent = null;
       if (!this.armed) {
         if (level >= QUIET) { this.quietAt = null; return false; }
         if (this.quietAt === null) this.quietAt = now;
         if (now - this.quietAt >= SILENCE_MS) this.armed = true;
         return false;
       }
-      const match = level >= LOUD && Number.isFinite(midi) && confidence >= 0.7 && Math.abs(midi - this.target().midi) <= 0.35;
-      if (!match) { this.correctAt = null; return false; }
+      const confidentLoud = level >= LOUD && Number.isFinite(midi) && confidence >= 0.7;
+      if (!confidentLoud) { this.correctAt = null; this.wrongAt = null; this.wrongPitch = null; return false; }
+      const match = Math.abs(midi - this.target().midi) <= 0.35;
+      if (!match) {
+        this.correctAt = null;
+        if (!this.hardMode) return false;
+        const pitch = Math.round(midi);
+        if (this.wrongPitch !== pitch) { this.wrongPitch = pitch; this.wrongAt = now; }
+        if (this.wrongAt === null || now - this.wrongAt < HOLD_MS) return false;
+        this.wrongCount++;
+        this.lastEvent = 'wrong';
+        this.advancePrompt();
+        this.resetGate();
+        return true;
+      }
+      this.wrongAt = null;
+      this.wrongPitch = null;
       if (this.correctAt === null) this.correctAt = now;
       if (now - this.correctAt < HOLD_MS) return false;
       const target = this.target();
       this.answers.push({ stringIndex: target.index, pitch: mod(target.pitch), durationMs: this.elapsed - this.promptAt });
-      if (this.mode === 'random') {
-        if (this.answers.length === 5 * this.setup.stringCount) this.done = true;
+      this.lastEvent = 'correct';
+      this.advancePrompt();
+      this.resetGate();
+      return true;
+    }
+    advancePrompt() {
+      if (this.hardMode && this.answers.length === 30) { this.done = true; return; }
+      if (this.randomMode) {
+        if (!this.hardMode && this.answers.length === 5 * this.setup.stringCount) this.done = true;
         else { this.chooseRandomPrompt(); this.updatePromptSpelling(); }
-        this.resetGate();
-        return true;
+        return;
       }
       this.string++;
       let newPitch = false;
       if (this.string === this.setup.stringCount) {
         this.string = 0;
         this.pass++;
-        if (this.pass === 5) this.done = true;
+        if (this.pass === 5 && this.hardMode) { this.pass = 0; this.pitch = choosePitch(this.pitch, this.random); newPitch = true; }
+        else if (this.pass === 5) this.done = true;
         else { this.pitch = choosePitch(this.pitch, this.random); newPitch = true; }
       }
       if (newPitch) this.updatePromptSpelling();
-      this.resetGate();
-      return true;
     }
     displayed() { this.promptAt = this.elapsed; }
     summary() {
       if (!this.done) throw new Error('Incomplete rounds are not records.');
-      const totalMs = this.answers.reduce((sum, a) => sum + a.durationMs, 0);
+      const answerTotalMs = this.answers.reduce((sum, a) => sum + a.durationMs, 0);
+      const totalMs = this.hardMode ? this.elapsed : answerTotalMs;
       return {
         completedAt: new Date().toISOString(), totalMs,
         averageMs: totalMs / this.answers.length,
@@ -142,66 +172,81 @@
         strings: this.setup.strings.map(s => {
           const answers = this.answers.filter(a => a.stringIndex === s.index);
           const totalMs = answers.reduce((sum, a) => sum + a.durationMs, 0);
-          return { index: s.index, label: s.label, ...(this.mode === 'random' ? { count: answers.length } : {}), totalMs, averageMs: answers.length ? totalMs / answers.length : null };
+          return { index: s.index, label: s.label, ...(this.randomMode ? { count: answers.length } : {}), totalMs, averageMs: answers.length ? totalMs / answers.length : null };
         }),
-        ...(this.mode === 'random' ? { mode: this.mode } : {}),
+        ...(this.hardMode ? { wrongCount: this.wrongCount } : {}),
+        ...(this.mode !== 'standard' ? { mode: this.mode } : {}),
       };
     }
   }
 
-  function validRecord(record, setup) {
+  function validRecord(record, setup, mode = 'standard') {
     if (!record || !Number.isSafeInteger(record.completed) || record.completed < 0 || !Number.isFinite(record.bestMs) || record.bestMs < 0 || !record.latest || typeof record.latest !== 'object') return false;
     if (record.runs === undefined) return true;
     if (!Array.isArray(record.runs) || record.runs.length > 100 || record.runs.length > record.completed) return false;
     return record.runs.every(run => {
-      if (!run || typeof run.completedAt !== 'string' || !Number.isFinite(Date.parse(run.completedAt)) || !Number.isFinite(run.totalMs) || run.totalMs < 0 || !Number.isFinite(run.averageMs) || !Array.isArray(run.answers) || run.answers.length !== setup.stringCount * 5) return false;
+       const expectedAnswers = mode === 'hard' || mode === 'random-hard' ? 30 : setup.stringCount * 5;
+       if (!run || typeof run.completedAt !== 'string' || !Number.isFinite(Date.parse(run.completedAt)) || !Number.isFinite(run.totalMs) || run.totalMs < 0 || !Number.isFinite(run.averageMs) || !Array.isArray(run.answers) || run.answers.length !== expectedAnswers || ((mode === 'hard' || mode === 'random-hard') && (!Number.isSafeInteger(run.wrongCount) || run.wrongCount < 0))) return false;
       let totalMs = 0;
       for (const answer of run.answers) {
         if (!answer || !Number.isInteger(answer.pitch) || answer.pitch < 0 || answer.pitch >= 12 || !Number.isInteger(answer.stringIndex) || !setup.strings.some(string => string.index === answer.stringIndex) || !Number.isFinite(answer.durationMs) || answer.durationMs < 0) return false;
         totalMs += answer.durationMs;
       }
       const tolerance = Math.max(1e-6, Math.abs(run.totalMs) * 1e-9);
-      return Math.abs(totalMs - run.totalMs) <= tolerance && Math.abs(run.averageMs - run.totalMs / run.answers.length) <= Math.max(1e-6, Math.abs(run.averageMs) * 1e-9);
+      const totalMatchesAnswers = mode === 'hard' || mode === 'random-hard'
+        ? totalMs <= run.totalMs + tolerance
+        : Math.abs(totalMs - run.totalMs) <= tolerance;
+      return totalMatchesAnswers && Math.abs(run.averageMs - run.totalMs / run.answers.length) <= Math.max(1e-6, Math.abs(run.averageMs) * 1e-9);
     });
+  }
+
+  function recordKey(setup, mode) {
+    if (!['standard', 'random', 'hard', 'random-hard'].includes(mode)) throw new Error('Invalid round mode.');
+    const suffix = { standard: '', random: RANDOM_RECORD_SUFFIX, hard: HARD_RECORD_SUFFIX, 'random-hard': RANDOM_HARD_RECORD_SUFFIX }[mode];
+    return `${setup.key}${suffix}`;
   }
 
   function readRecord(storage, setup, mode = 'standard') {
     const records = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
     if (!records || typeof records !== 'object' || Array.isArray(records)) throw new Error('Invalid local records.');
-    const key = mode === 'random' ? `${setup.key}${RANDOM_RECORD_SUFFIX}` : setup.key;
+    const key = recordKey(setup, mode);
     const record = records[key];
-    if (record && !validRecord(record, setup)) throw new Error('Invalid local record for this setup.');
+    if (record && !validRecord(record, setup, mode)) throw new Error('Invalid local record for this setup.');
     return record ? { ...record, runs: record.runs || [] } : { completed: 0, runs: [] };
   }
 
   function storeRecord(storage, setup, result, mode = 'standard') {
     let records = JSON.parse(storage.getItem(STORAGE_KEY) || '{}');
     if (!records || typeof records !== 'object' || Array.isArray(records)) throw new Error('Invalid local records.');
-    if (!['standard', 'random'].includes(mode)) throw new Error('Invalid round mode.');
-    const key = mode === 'random' ? `${setup.key}${RANDOM_RECORD_SUFFIX}` : setup.key;
+    const key = recordKey(setup, mode);
     const old = records[key];
-    if (old && !validRecord(old, setup)) throw new Error('Invalid local record for this setup.');
-    if (!Array.isArray(result.answers) || result.answers.length !== setup.stringCount * 5) throw new Error('Incomplete detailed round.');
+    if (old && !validRecord(old, setup, mode)) throw new Error('Invalid local record for this setup.');
+    const expectedAnswers = mode === 'hard' || mode === 'random-hard' ? 30 : setup.stringCount * 5;
+    if (!Array.isArray(result.answers) || result.answers.length !== expectedAnswers || ((mode === 'hard' || mode === 'random-hard') && (!Number.isSafeInteger(result.wrongCount) || result.wrongCount < 0))) throw new Error('Incomplete detailed round.');
     const completed = (old?.completed || 0) + 1;
-    const run = { completedAt: result.completedAt, totalMs: result.totalMs, averageMs: result.averageMs, answers: result.answers.map(answer => ({ stringIndex: answer.stringIndex, pitch: answer.pitch, durationMs: answer.durationMs })) };
+    const run = { completedAt: result.completedAt, totalMs: result.totalMs, averageMs: result.averageMs, ...(mode === 'hard' || mode === 'random-hard' ? { wrongCount: result.wrongCount } : {}), answers: result.answers.map(answer => ({ stringIndex: answer.stringIndex, pitch: answer.pitch, durationMs: answer.durationMs })) };
     const runs = [...(old?.runs || []), run].slice(-100);
-    const next = { ...(old || {}), setup, ...(mode === 'random' ? { mode } : {}), completed, bestMs: old ? Math.min(old.bestMs, result.totalMs) : result.totalMs, latest: result, runs };
-    if (!validRecord(next, setup)) throw new Error('Invalid completed round data.');
+    const next = { ...(old || {}), setup, ...(mode !== 'standard' ? { mode } : {}), completed, bestMs: old ? Math.min(old.bestMs, result.totalMs) : result.totalMs, latest: result, runs };
+    if (!validRecord(next, setup, mode)) throw new Error('Invalid completed round data.');
     records[key] = next;
     storage.setItem(STORAGE_KEY, JSON.stringify(records));
     return records[key];
   }
 
-  function readRandomPreference(win) {
+  function readModePreference(win) {
     try {
       const value = JSON.parse(win.localStorage.getItem(PREFERENCES_KEY) || 'null');
-      return value?.version === 1 && typeof value.randomMode === 'boolean' ? value.randomMode : false;
-    } catch (_) { return false; }
+      return value?.version === 1 && typeof value.randomMode === 'boolean'
+        ? { randomMode: value.randomMode, hardMode: typeof value.hardMode === 'boolean' ? value.hardMode : false }
+        : { randomMode: false, hardMode: false };
+    } catch (_) { return { randomMode: false, hardMode: false }; }
   }
 
-  function storeRandomPreference(win, randomMode) {
-    try { win.localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, randomMode })); } catch (_) {}
+  function readRandomPreference(win) { return readModePreference(win).randomMode; }
+  function storeModePreference(win, randomMode, hardMode) {
+    try { win.localStorage.setItem(PREFERENCES_KEY, JSON.stringify({ version: 1, randomMode, hardMode })); } catch (_) {}
   }
+  function storeRandomPreference(win, randomMode) { storeModePreference(win, randomMode, readModePreference(win).hardMode); }
 
   async function resolveDesktopInput(win) {
     const audio = win.feedBackDesktop?.audio;
@@ -327,7 +372,7 @@
     return Math.min(1, Math.sqrt(sum / samples.length) * 5);
   }
 
-  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, readRecord, storeRecord, readRandomPreference, storeRandomPreference, scaledRms, resolveDesktopInput, openBrowser, mount };
+  const logic = { Round, snapshotSetup, choosePitch, noteName, midiFrequency, readRecord, storeRecord, readRandomPreference, storeRandomPreference, readModePreference, storeModePreference, scaledRms, resolveDesktopInput, openBrowser, mount };
   if (typeof module !== 'undefined' && module.exports) { module.exports = logic; return; }
   if (root.__fretboardRecallLoaded) return;
   root.__fretboardRecallLoaded = true;
@@ -348,12 +393,12 @@
     container.innerHTML = `<section class="fr-game" aria-label="Fretboard Recall">
       <header class="fr-header"><div><p class="fr-eyebrow">One note. Every string.</p><h2>Fretboard Recall</h2></div><span class="fr-badge">5 passes · Local records</span></header>
       <p class="fr-setup">Reading your FeedBack setup…</p>
-      <div class="fr-action-row"><label class="fr-mode"><input type="checkbox" class="fr-random-mode"> Random note + string</label>
+      <div class="fr-action-row"><div class="fr-mode-options"><label class="fr-mode"><input type="checkbox" class="fr-random-mode"> Random note + string</label><label class="fr-mode"><input type="checkbox" class="fr-hard-mode"> Hard mode · wrong notes advance</label></div>
       <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause" disabled>Pause</button><button type="button" class="fr-retry">Start round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div></div>
-      <div class="fr-round-progress" hidden><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
+       <div class="fr-round-progress" hidden><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><p class="fr-wrong-count" aria-live="polite"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
       <div class="fr-active-grid">
         <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-mute-cue" data-state="idle" role="status" aria-live="polite" aria-atomic="true"><span class="fr-mute-cue-icon" aria-hidden="true"></span><span class="fr-mute-cue-text"></span></p><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Play the requested physical string; pitch detection cannot verify which string you play. Frets 0–11.</p></section>
-        <section class="fr-live" aria-label="Audio input status"><p class="fr-eyebrow">Audio input</p><p class="fr-live-status" role="status" aria-live="polite" aria-atomic="true">Not listening</p><p class="fr-hint">Input feedback never names played notes.</p></section>
+         <section class="fr-live" aria-label="Audio input status"><p class="fr-eyebrow">Audio input</p><p class="fr-live-status" role="status" aria-live="polite" aria-atomic="true">Not listening</p><p class="fr-wrong-count-active"></p><p class="fr-hint">Input feedback never names played notes.</p></section>
         <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side · string <span class="fr-string-count"></span></p></section>
       </div>
        <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
@@ -447,10 +492,13 @@
     function updateControls() {
       const active = !!round && !round.done && !error;
       el('random-mode').disabled = active || starting;
+      el('hard-mode').disabled = active || starting;
       el('hear').disabled = !active || round.paused;
       el('hear').hidden = !round || round.done;
-      text('eyebrow', round?.mode === 'random' || (!round && el('random-mode').checked) ? 'Every prompt is independent.' : 'One note. Every string.');
-      text('badge', `${round?.mode === 'random' || (!round && el('random-mode').checked) ? 'Random' : '5 passes'} · Local records`);
+      const randomMode = active ? round.randomMode : el('random-mode').checked;
+      const hardMode = active ? round.hardMode : el('hard-mode').checked;
+      text('eyebrow', randomMode ? 'Every prompt is independent.' : 'One note. Every string.');
+      text('badge', `${hardMode ? 'Hard · 30 correct' : randomMode ? 'Random' : '5 passes'} · Local records`);
       text('retry', error ? 'Retry' : round?.done ? 'Play again' : starting ? 'Starting…' : round ? 'Restart round' : 'Start round');
       el('retry').disabled = starting;
     }
@@ -463,7 +511,9 @@
         const number = setup.stringCount - round.target().index;
         if (round.armed) {
           state = 'armed';
-          message = `Silence gate armed — now play String ${number}. Wrong notes do not advance; after a correct note, mute again for the next prompt.`;
+          message = round.hardMode
+            ? `Silence gate armed — now play String ${number}. A sustained wrong note advances; mute before the next target.`
+            : `Silence gate armed — now play String ${number}. Wrong notes do not advance; after a correct note, mute again for the next prompt.`;
         } else {
           state = 'waiting';
           message = `Mute all strings for 0.18 s to arm, then play String ${number}.`;
@@ -473,11 +523,18 @@
       if (cue.getAttribute('data-state') !== state) cue.setAttribute('data-state', state);
       text('mute-cue-text', message);
     }
-    el('random-mode').checked = readRandomPreference(win);
-    el('random-mode').onchange = () => { storeRandomPreference(win, el('random-mode').checked); updateControls(); if (setup) renderHistory(); };
+    const modePreference = readModePreference(win);
+    el('random-mode').checked = modePreference.randomMode;
+    el('hard-mode').checked = modePreference.hardMode;
+    const saveModePreference = () => {
+      storeModePreference(win, el('random-mode').checked, el('hard-mode').checked);
+      updateControls(); if (setup) renderHistory();
+    };
+    el('random-mode').onchange = saveModePreference;
+    el('hard-mode').onchange = saveModePreference;
     function setLive(state) {
       if (liveState === state) return;
-      const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet', uncertain: 'Uncertain audio · play one clear note', wrong: 'Wrong note — try again', paused: 'Paused · input feedback cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio' };
+      const labels = { stopped: 'Not listening', startup: 'Reading setup…', consent: 'Waiting for input confirmation', acquiring: 'Opening input…', listening: 'Listening · waiting for a fresh sample', silence: 'Silence · mute before each answer', quiet: 'Listening · signal too quiet', uncertain: 'Uncertain audio · play one clear note', wrong: round?.hardMode ? 'Wrong note — hold to advance' : 'Wrong note — try again', paused: 'Paused · input feedback cleared', failed: 'Input unavailable · check settings and retry', complete: 'Round complete · input stopped', expired: 'Waiting for fresh audio' };
       liveState = state;
       cached('live').setAttribute('data-state', state);
       text('live-status', labels[state]);
@@ -539,7 +596,8 @@
        const status = cached('history-status'), trend = cached('history-trend'), heatmap = cached('history-heatmap'), worst = cached('history-worst');
        trend.replaceChildren(); heatmap.replaceChildren(); worst.replaceChildren();
       let record;
-       const mode = round ? round.mode : el('random-mode').checked ? 'random' : 'standard';
+       const active = round && !round.done && !error;
+       const mode = active ? round.mode : el('hard-mode').checked ? (el('random-mode').checked ? 'random-hard' : 'hard') : el('random-mode').checked ? 'random' : 'standard';
       try { record = readRecord(win.localStorage, setup, mode); }
        catch (_) { status.textContent = 'Saved progress could not be read (storage unavailable or corrupted).'; renderUnavailableSlowest(); return; }
       status.textContent = record.runs.length ? `${record.completed} completed rounds · personal best ${seconds(record.bestMs)} · showing up to the latest 100 detailed rounds. Older aggregate totals are retained; older answer details are not available.` : record.completed ? `${record.completed} older round${record.completed === 1 ? '' : 's'} saved · best ${seconds(record.bestMs)}. Detailed charts start with your next completed round.` : 'No saved rounds for this exact setup yet.';
@@ -634,8 +692,12 @@
     }
     function renderProgress() {
       cached('completion').value = round.answers.length;
-      cached('passes').hidden = round.mode === 'random';
-      cached('passes').setAttribute('aria-hidden', String(round.mode === 'random'));
+      cached('completion').max = round.hardMode ? 30 : 5 * setup.stringCount;
+      cached('passes').hidden = round.randomMode || round.hardMode;
+      cached('passes').setAttribute('aria-hidden', String(round.randomMode || round.hardMode));
+      cached('wrong-count').hidden = !round.hardMode;
+      text('wrong-count', `Wrong notes: ${round.wrongCount}`);
+      text('wrong-count-active', round.hardMode ? `Wrong notes: ${round.wrongCount}` : '');
       passSteps.forEach((step, i) => {
         const state = round.done || i < round.pass ? 'complete' : i === round.pass ? 'current' : 'upcoming';
         step.setAttribute('data-state', state);
@@ -648,24 +710,27 @@
         const stringIndex = position;
         const sampled = answersByString.get(stringIndex) || 0;
         const isCurrent = round.target().index === stringIndex;
-        const state = round.done ? 'complete' : isCurrent ? 'current' : round.mode === 'random' ? sampled ? 'sampled' : 'upcoming' : position < round.string ? 'complete' : 'upcoming';
+        const state = round.done ? 'complete' : isCurrent ? 'current' : round.randomMode ? sampled ? 'sampled' : 'upcoming' : position < round.string ? 'complete' : 'upcoming';
         row.setAttribute('data-state', state);
         if (state === 'current') row.setAttribute('aria-current', 'step'); else row.removeAttribute('aria-current');
-        instruction.textContent = state === 'current' ? 'Play this string' : round.mode === 'random' ? sampled ? `Answered ${sampled}` : 'Not selected yet' : state === 'complete' ? 'Done' : 'Up next';
-        row.setAttribute('aria-label', round.mode === 'random' ? `String ${setup.stringCount - stringIndex} · ${sampled} accepted answers${isCurrent ? ' · requested now' : ''}` : `String ${setup.stringCount - stringIndex}`);
+        instruction.textContent = state === 'current' ? 'Play this string' : round.randomMode ? sampled ? `Answered ${sampled}` : 'Not selected yet' : state === 'complete' ? 'Done' : 'Up next';
+        row.setAttribute('aria-label', round.randomMode ? `String ${setup.stringCount - stringIndex} · ${sampled} accepted answers${isCurrent ? ' · requested now' : ''}` : `String ${setup.stringCount - stringIndex}`);
       });
     }
     function renderPrompt() {
       const target = round.target();
+      el('round-progress').hidden = !round.hardMode;
       text('note', round.promptSpelling);
       const number = setup.stringCount - target.index;
       text('string', `String ${number}${number === 1 ? ' · highest-side' : number === setup.stringCount ? ' · lowest-side' : ''}`);
-      text('progress', round.mode === 'random'
-        ? `Random prompts · ${round.answers.length} / ${5 * setup.stringCount} accepted · current string ${number}`
-        : `Pass ${round.pass + 1} / 5 · Step ${round.string + 1} / ${setup.stringCount} · ${round.answers.length} / ${5 * setup.stringCount} accepted`);
+       text('progress', round.hardMode
+         ? `${round.randomMode ? 'Hard random prompts' : 'Hard prompts'} · ${round.answers.length} / 30 correct · current string ${number} · ${round.wrongCount} wrong`
+         : round.randomMode
+           ? `Random prompts · ${round.answers.length} / ${5 * setup.stringCount} accepted · current string ${number}`
+           : `Pass ${round.pass + 1} / 5 · Step ${round.string + 1} / ${setup.stringCount} · ${round.answers.length} / ${5 * setup.stringCount} accepted`);
       renderProgress();
       text('status', 'Mute all strings briefly; then pluck the requested string.');
-      text('hint', round.mode === 'random' ? 'Find this note on the requested string. Pitch and string are independently randomized; repeats are possible.' : 'Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.');
+       text('hint', round.randomMode ? 'Find this note on the requested string. Pitch and string are independently randomized; repeats are possible.' : 'Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.');
       // Start timing after assigning the prompt, never after the mute gate.
       round.displayed();
       updateMuteCue();
@@ -683,7 +748,7 @@
         resetLive('expired');
         if (round && !round.done && !error) {
           const gateArmed = round.armed && (round.lastSample === null || now - round.lastSample <= MAX_GAP_MS);
-          text('status', gateArmed ? 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
+          text('status', gateArmed ? round.hardMode ? 'Ready — pluck the requested string. A sustained wrong note advances to the next target.' : 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
         }
       }
       if (adapter && !round?.paused && now - lastInput > 2000) fail(new Error('Live input frames stopped arriving.'));
@@ -701,14 +766,14 @@
       updateMuteCue();
       el('pause').disabled = true;
       const result = round.summary();
-      text('note', ''); text('string', ''); text('progress', round.mode === 'random' ? `Random round complete · ${round.answers.length} accepted` : `Completed: 5 passes · ${round.answers.length} accepted`);
+       text('note', ''); text('string', ''); text('progress', round.hardMode ? `${round.randomMode ? 'Hard random' : 'Hard'} round complete · exactly 30 correct · ${round.wrongCount} wrong` : round.randomMode ? `Random round complete · ${round.answers.length} accepted` : `Completed: 5 passes · ${round.answers.length} accepted`);
       renderProgress();
        text('clock', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
-       text('round-total', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
+        text('round-total', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer${round.hardMode ? ` · Wrong notes: ${round.wrongCount}` : ''}`);
       const summary = el('summary'); summary.replaceChildren();
       for (const s of result.strings) {
         const p = doc.createElement('p');
-        p.textContent = round.mode === 'random'
+         p.textContent = round.randomMode
           ? s.count === 0 ? `${s.label}: no answers this round` : `${s.label}: ${s.count} answers · total ${seconds(s.totalMs)} · average ${seconds(s.averageMs)}`
           : `${s.label}: total ${seconds(s.totalMs)} · average ${seconds(s.averageMs)}`;
         summary.appendChild(p);
@@ -741,12 +806,18 @@
       else if (wrong) setLive('wrong');
       else setLive('listening');
       if (round.sample(value, lastInput)) {
-        if (round.done) finish(); else renderPrompt();
+        if (round.done) finish(); else {
+          renderPrompt();
+          if (round.lastEvent === 'wrong') {
+            setLive('listening');
+            text('status', 'Wrong note — next target. Mute all strings before playing again.');
+          }
+        }
         return;
       }
       updateMuteCue();
-      if (wrong) text('status', 'Wrong note — try again.');
-      else text('status', round.armed ? 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
+       if (wrong) text('status', round.hardMode ? 'Wrong note — hold briefly to advance.' : 'Wrong note — try again.');
+       else text('status', round.armed ? round.hardMode ? 'Ready — pluck the requested string. A sustained wrong note advances to the next target.' : 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
     }
     async function acquire() {
       const gen = ++generation;
@@ -808,14 +879,14 @@
               if (snapshotSetup(host.workingTuning.get(), tunings).key !== setup.key) throw new Error('Host setup changed before input confirmation. Retry.');
             } catch (e) { fail(e); return; }
             el('input').hidden = true;
-            round = new Round(setup, random, { randomMode: el('random-mode').checked }); lastClock = win.performance.now();
+             round = new Round(setup, random, { randomMode: el('random-mode').checked, hardMode: el('hard-mode').checked }); lastClock = win.performance.now();
             updateControls();
             renderPrompt(); el('pause').disabled = false; text('pause', 'Pause');
             acquire();
           };
           return;
         }
-        round = new Round(setup, random, { randomMode: el('random-mode').checked }); lastClock = win.performance.now();
+        round = new Round(setup, random, { randomMode: el('random-mode').checked, hardMode: el('hard-mode').checked }); lastClock = win.performance.now();
         updateControls();
         renderPrompt(); el('pause').disabled = false; text('pause', 'Pause');
         await acquire();

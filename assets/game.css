@@ -19,6 +19,8 @@
 .fr-game .fr-action-row { margin-top: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
 .fr-game .fr-mode { display: inline-flex; align-items: center; gap: 7px; min-height: 38px; color: var(--fr-ink); font-size: 13px; font-weight: 650; cursor: pointer; }
 .fr-game .fr-mode input { width: 18px; height: 18px; accent-color: var(--fr-accent); }
+.fr-game .fr-mode-options { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.fr-game .fr-wrong-count, .fr-game .fr-wrong-count-active { color: #ffaaa5; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .fr-game .fr-round-progress { margin: 0; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 12px; }
 .fr-game .fr-passes { display: flex; gap: 6px; }
 .fr-game .fr-pass { display: grid; place-items: center; width: 25px; height: 25px; border: 1px solid #58677a; border-radius: 50%; color: var(--fr-muted); font-size: 12px; font-weight: 700; }
