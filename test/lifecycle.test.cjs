@@ -168,7 +168,7 @@ test('exact-device mismatch stops stream instead of accepting a substituted inpu
 
 function dom() {
   const nodes = new Map(), subscriptions = new Map(), timers = new Set(); let now = 0;
-  const node = () => ({ _text: '', writes: 0, get textContent() { return this._text; }, set textContent(value) { this._text = value; this.writes++; }, disabled: false, children: [], attributes: {}, style: { setProperty() {} }, setAttribute(k, v) { this.attributes[k] = v; }, removeAttribute(k) { delete this.attributes[k]; }, replaceChildren(...children) { this.children = children; }, appendChild(n) { this.children.push(n); } });
+  const node = () => ({ _text: '', writes: 0, get textContent() { return this._text; }, set textContent(value) { this._text = value; this.writes++; }, disabled: false, children: [], attributes: {}, style: { setProperty() {} }, setAttribute(k, v) { this.attributes[k] = v; }, getAttribute(k) { return this.attributes[k] ?? null; }, removeAttribute(k) { delete this.attributes[k]; }, replaceChildren(...children) { this.children = children; }, appendChild(n) { this.children.push(n); } });
   // EventTarget executes capture listeners before the framework's onclick.
   const quit = new EventTarget(); let publicEnds = 0;
   const quitClick = () => { const event = new Event('click', { cancelable: true }); if (quit.dispatchEvent(event)) publicEnds++; };
@@ -218,19 +218,28 @@ test('complete mounted browser round saves once locally and never submits framew
     for (let i = 0; i < 3; i++) emit(.05);
   }
   assert.match(d.nodes.get('.fr-progress').textContent, /Completed: 5 passes/);
+  assert.equal(d.nodes.get('.fr-mute-cue').attributes['data-state'], 'complete');
+  assert.match(d.nodes.get('.fr-mute-cue-text').textContent, /Round complete/);
   assert.equal(d.nodes.get('.fr-detected').textContent, '—');
   assert.equal(d.nodes.get('.fr-live').attributes['data-state'], 'complete');
   assert.equal(d.nodes.get('.fr-completion').value, 30);
   assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
   assert.match(d.nodes.get('.fr-history-status').textContent, /1 completed rounds.*showing up to the latest 100/);
-  assert.equal(d.nodes.get('.fr-history-trend').children[1].children.length, 1);
+  const trend = d.nodes.get('.fr-history-trend');
+  assert.equal(trend.children[1].attributes.role, 'img');
+  assert.equal(trend.children[1].children.length, 1);
+  assert.equal(trend.children[2].children[1].children.length, 1);
+  assert.match(trend.children[2].children[0].textContent, /View exact round times/);
   const heatmap = d.nodes.get('.fr-history-heatmap').children[3].children[0];
   assert.equal(heatmap.children[2].children.length, 6);
   assert.match(heatmap.children[2].children[0].children[0].textContent, /String 1 · highest-side/);
   assert.match(heatmap.children[2].children[5].children[0].textContent, /String 6 · lowest-side/);
-  assert.ok(heatmap.children[2].children.flatMap(row => row.children).some(cell => /Avg .* · \d+ answers? · slowest recent/.test(cell.textContent)));
-  assert.ok(heatmap.children[2].children.flatMap(row => row.children).some(cell => /intensity [1-4]\/4/.test(cell.textContent)));
+  const cells = heatmap.children[2].children.flatMap(row => row.children.slice(1));
+  assert.ok(cells.some(cell => /^\d+\.\d+ s \/ \d+\.\d+ s · \d+ · L[1-4]$/.test(cell.textContent)));
+  assert.ok(cells.every(cell => cell.textContent.length < 32));
+  assert.ok(cells.some(cell => /average .* accepted answers, slowest recent .* intensity [1-4] of 4/.test(cell.attributes['aria-label'])));
+  assert.ok(cells.some(cell => cell.textContent === '—' && /no saved answers/.test(cell.attributes['aria-label'])));
   assert.match(d.nodes.get('.fr-history-heatmap').children[2].textContent, /level 1 is faster and level 4 is slower/);
   assert.match(d.container.innerHTML, /does not identify a physical string or log incorrect notes/);
   assert.equal(d.nodes.get('.fr-retry').textContent, 'Play again');
@@ -238,6 +247,23 @@ test('complete mounted browser round saves once locally and never submits framew
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   assert.deepEqual(b.counts(), { stopped: 1, closed: 2 }); game.stop(); assert.equal(d.timers.size, 0);
+});
+test('responsive layout uses desktop columns, mobile stacking, and compact scrollable history charts', () => {
+  const css = fs.readFileSync(require.resolve('../assets/game.css'), 'utf8');
+  assert.match(css, /grid-template-columns:\s*minmax\(0, 1fr\) minmax\(0, 1fr\)/);
+  assert.match(css, /"diagram feedback"/);
+  assert.match(css, /"history summary"/);
+  assert.match(css, /@media \(max-width: 600px\)[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(css, /\.fr-heatmap-wrap\s*\{\s*overflow-x:\s*auto;/);
+  assert.match(css, /\.fr-trend-chart\s*\{[^}]*height:\s*44px/);
+  assert.match(css, /\.fr-trend-details summary\s*\{\s*cursor:\s*pointer;/);
+});
+test('mute cue uses distinct waiting and armed colors and remains distinct in forced colors', () => {
+  const css = fs.readFileSync(require.resolve('../assets/game.css'), 'utf8');
+  assert.match(css, /\.fr-mute-cue\s*\{[^}]*#f2a94a[^}]*#ffe0a6/);
+  assert.match(css, /\.fr-mute-cue\[data-state="armed"\]\s*\{[^}]*var\(--fr-accent\)[^}]*#d4ffe9/);
+  assert.match(css, /@media \(forced-colors: active\)[\s\S]*?\.fr-mute-cue\[data-state="waiting"\][^{]*\{[^}]*dashed/);
+  assert.match(css, /\.fr-mute-cue\[data-state="armed"\][^{]*\{[^}]*Highlight/);
 });
 test('random mode UI stays selectable only between rounds, reports actual prompts, and saves separate records', async () => {
   const d = dom(), b = browser(); Object.assign(d.win, b.win);
@@ -401,18 +427,28 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   const game = mount(d.win, d.container, () => 0.9); await game.begin();
   const get = name => d.nodes.get(`.fr-${name}`);
   const state = () => get('live').attributes['data-state'];
+  const cue = () => get('mute-cue');
+  const cueText = () => get('mute-cue-text').textContent;
   const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
   assert.equal(state(), 'listening');
+  assert.match(d.container.innerHTML, /class="fr-mute-cue"[^>]*role="status" aria-live="polite" aria-atomic="true"/);
+  assert.equal(cue().attributes['data-state'], 'waiting');
+  assert.match(cueText(), /Mute all strings.*then play String 6/);
   assert.match(d.container.innerHTML, /aria-live="polite" aria-atomic="true"/);
   assert.doesNotMatch(d.container.innerHTML.match(/<section class="fr-live"[\s\S]*?<\/section>/)[0], /aria-live|role="status"/);
   const prompt = get('note').textContent;
   for (let i = 0; i < 4; i++) emit(0);
   assert.equal(state(), 'silence'); assert.equal(get('detected').textContent, '—');
+  assert.equal(cue().attributes['data-state'], 'armed');
+  assert.match(cueText(), /Silence gate armed — now play String 6/);
+  const armedCueWrites = get('mute-cue-text').writes;
   // This octave is above every possible low-E answer.
   for (let i = 0; i < 5; i++) emit(.05);
   assert.equal(get('detected').textContent, 'D♭4');
+  assert.equal(get('mute-cue-text').writes, armedCueWrites, 'stable armed state does not churn cue DOM');
   assert.equal(state(), 'detected'); assert.equal(get('completion').value, 0);
   assert.equal(get('note').textContent, prompt);
+  assert.match(cueText(), /Silence gate armed — now play String 6/);
   const writes = get('detected').writes;
   emit(.05); emit(.05);
   assert.equal(get('detected').writes, writes, 'Unchanged detected notes must not rewrite DOM');
@@ -427,6 +463,8 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   for (let i = 0; i < 3; i++) emit(.05);
   assert.equal(get('completion').value, 1);
   assert.match(get('string').textContent, /String 5/);
+  assert.equal(cue().attributes['data-state'], 'waiting');
+  assert.match(cueText(), /Mute all strings.*then play String 5/);
   assert.equal(get('detected').textContent, `${get('note').textContent}${Math.floor(midi / 12) - 1}`);
   assert.equal(state(), 'detected');
   assert.match(get('status').textContent, /Mute/);
@@ -435,12 +473,18 @@ test('live card shows wrong pitches, clears uncertain/silent input and preserves
   d.advance(351); assert.equal(state(), 'expired'); assert.equal(get('detected').textContent, '—');
   emit(.05); assert.equal(state(), 'detected');
   get('pause').onclick(); assert.equal(state(), 'paused'); assert.equal(get('detected').textContent, '—');
+  assert.equal(cue().attributes['data-state'], 'paused');
+  assert.match(cueText(), /Paused — resume, then mute all strings before playing String 5/);
   emit(.05); assert.equal(state(), 'paused');
   get('pause').onclick(); assert.equal(state(), 'listening'); assert.equal(get('detected').textContent, '—');
+  assert.equal(cue().attributes['data-state'], 'waiting');
   emit(.05); assert.equal(state(), 'detected');
   d.advance(2100); assert.equal(state(), 'failed'); assert.equal(get('detected').textContent, '—');
+  assert.equal(cue().attributes['data-state'], 'failed');
+  assert.doesNotMatch(cueText(), /Muted — now play/);
   assert.match(get('status').textContent, /frames stopped/);
   await game.begin(); assert.equal(state(), 'listening'); assert.equal(get('completion').value, 0);
+  assert.equal(cue().attributes['data-state'], 'waiting');
   game.stop(); assert.equal(state(), 'stopped'); assert.equal(get('detected').textContent, '—');
 });
 

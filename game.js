@@ -346,7 +346,7 @@
       <div class="fr-controls"><button type="button" class="fr-input" hidden>Confirm desktop input</button><button type="button" class="fr-pause" disabled>Pause</button><button type="button" class="fr-retry">Start round</button><button type="button" class="fr-settings">Host settings</button><button type="button" class="fr-leave">Stop / Back to songs</button></div></div>
       <div class="fr-round-progress"><div class="fr-passes" aria-label="Five passes"></div><p class="fr-progress"></p><progress class="fr-completion" max="1" value="0" aria-label="Accepted answers"></progress></div>
       <div class="fr-cards">
-        <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
+         <section class="fr-target" aria-label="Requested note"><p class="fr-eyebrow">Your target · pitch class</p><div aria-live="polite" aria-atomic="true"><p class="fr-note"></p><p class="fr-string"></p></div><p class="fr-mute-cue" data-state="idle" role="status" aria-live="polite" aria-atomic="true"><span class="fr-mute-cue-icon" aria-hidden="true"></span><span class="fr-mute-cue-text"></span></p><button type="button" class="fr-hear" hidden>Hear note</button><p class="fr-audio-status" role="status" aria-live="polite"></p><p class="fr-hint">Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.</p></section>
         <section class="fr-live" aria-label="Live detected note"><p class="fr-eyebrow">Live input · detected note</p><p class="fr-detected">—</p><p class="fr-live-status">Not listening</p><p class="fr-hint">Reported pitch and octave only. Physical string is not detected.</p></section>
       </div>
        <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side</p></section>
@@ -442,6 +442,25 @@
       text('retry', error ? 'Retry' : round?.done ? 'Play again' : starting ? 'Starting…' : round ? 'Restart round' : 'Start round');
       el('retry').disabled = starting;
     }
+    function updateMuteCue() {
+      let state = 'idle', message = 'Start a round to see when it is time to play.';
+      if (error) { state = 'failed'; message = 'Input unavailable — check settings and retry.'; }
+      else if (round?.done) { state = 'complete'; message = 'Round complete.'; }
+      else if (round?.paused) { state = 'paused'; message = `Paused — resume, then mute all strings before playing String ${setup.stringCount - round.target().index}.`; }
+      else if (round) {
+        const number = setup.stringCount - round.target().index;
+        if (round.armed) {
+          state = 'armed';
+          message = `Silence gate armed — now play String ${number}. Wrong notes do not advance; after a correct note, mute again for the next prompt.`;
+        } else {
+          state = 'waiting';
+          message = `Mute all strings for 0.18 s to arm, then play String ${number}.`;
+        }
+      }
+      const cue = cached('mute-cue');
+      if (cue.getAttribute('data-state') !== state) cue.setAttribute('data-state', state);
+      text('mute-cue-text', message);
+    }
     el('random-mode').onchange = () => { updateControls(); if (setup) renderHistory(); };
     function setLive(state, note = '—') {
       if (liveState === state && liveNote === note) return;
@@ -459,6 +478,7 @@
       resetLive('failed');
       el('input').hidden = true;
       round?.pause(true);
+      updateMuteCue();
       updateControls();
       text('status', `${e.message || e} No record saved. Check host settings, then Retry.`);
       el('pause').disabled = true;
@@ -513,23 +533,28 @@
 
       const heading = node('h4', '', 'Round time trend · oldest to newest');
       trend.appendChild(heading);
-      const list = node('ol', 'fr-trend');
-      const maxMs = Math.max(...record.runs.map(run => run.totalMs), 1);
-      record.runs.forEach((run, index) => {
-        const item = node('li', 'fr-trend-item');
-        const date = new Date(run.completedAt);
-        const roundNumber = record.completed - record.runs.length + index + 1;
-        const label = Number.isNaN(date.getTime()) ? `Round ${roundNumber}` : `Round ${roundNumber} · ${date.toLocaleDateString()}`;
-        const time = node('span', 'fr-trend-label', `${label}: ${seconds(run.totalMs)}`);
-        const bar = node('span', 'fr-trend-bar');
-        bar.setAttribute('aria-hidden', 'true'); bar.style.setProperty('--fr-bar-width', `${Math.max(2, run.totalMs / maxMs * 100)}%`);
-        item.appendChild(time); item.appendChild(bar); list.appendChild(item);
-      });
-      trend.appendChild(list);
+       const chart = node('div', 'fr-trend-chart');
+       chart.setAttribute('role', 'img');
+       chart.setAttribute('aria-label', `Round-time trend chart, oldest to newest, ${record.runs.length} rounds. Open the ordered round list for exact times.`);
+       const maxMs = Math.max(...record.runs.map(run => run.totalMs), 1);
+       const roundDetails = node('details', 'fr-trend-details');
+       roundDetails.appendChild(node('summary', '', 'View exact round times · oldest to newest'));
+       const list = node('ol', 'fr-trend');
+       record.runs.forEach((run, index) => {
+         const date = new Date(run.completedAt);
+         const roundNumber = record.completed - record.runs.length + index + 1;
+         const label = Number.isNaN(date.getTime()) ? `Round ${roundNumber}` : `Round ${roundNumber} · ${date.toLocaleDateString()}`;
+         const bar = node('span', 'fr-trend-bar');
+         bar.setAttribute('aria-hidden', 'true'); bar.style.setProperty('--fr-bar-height', `${Math.max(3, run.totalMs / maxMs * 36)}px`);
+         chart.appendChild(bar);
+         list.appendChild(node('li', 'fr-trend-label', `${label}: ${seconds(run.totalMs)}`));
+       });
+       roundDetails.appendChild(list);
+       trend.appendChild(chart); trend.appendChild(roundDetails);
 
       heatmap.appendChild(node('h4', '', 'Target pitch class by physical string'));
-      heatmap.appendChild(node('p', 'fr-history-note', 'Each cell shows average accepted-answer time, attempt count, and the slowest recent accepted answer. Rows are string 1 (highest-side) through the lowest-side; columns are target pitch classes, not detected string identities.'));
-      heatmap.appendChild(node('p', 'fr-history-note', 'Intensity levels compare populated cells in this heatmap: level 1 is faster and level 4 is slower. Higher intensity means a higher average response time; the level and time are written in each cell, so color is not the only indicator.'));
+      heatmap.appendChild(node('p', 'fr-history-note', 'Cells show average / slowest time in seconds · accepted-answer count · intensity level (for example, 1.20 / 2.40 · 3 · L2). Rows are requested strings, highest-side to lowest-side; columns are target pitch classes, not detected string identities.'));
+      heatmap.appendChild(node('p', 'fr-history-note', 'Intensity compares populated cells: level 1 is faster and level 4 is slower. Color is not the only indicator.'));
       const table = node('table', 'fr-heatmap');
       table.appendChild(node('caption', '', 'Average accepted-answer times by physical string and target pitch class'));
       const head = node('thead'), headerRow = node('tr');
@@ -564,11 +589,11 @@
           if (aggregate) {
             const average = aggregate.totalMs / aggregate.count;
             const level = intensity(average);
-            cell.textContent = `Avg ${seconds(average)} · ${aggregate.count} ${aggregate.count === 1 ? 'answer' : 'answers'} · slowest recent ${seconds(aggregate.slowestMs)} · intensity ${level}/4${level === 4 ? ' (slower)' : ''}`;
+            cell.textContent = `${seconds(average)} / ${seconds(aggregate.slowestMs)} · ${aggregate.count} · L${level}`;
             cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: average ${seconds(average)}, ${aggregate.count} accepted answers, slowest recent ${seconds(aggregate.slowestMs)}, intensity ${level} of 4${level === 4 ? ', slower' : ''}`);
             cell.setAttribute('data-attempts', aggregate.count);
             cell.setAttribute('data-intensity', level);
-          } else { cell.textContent = 'No data'; cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: no saved answers`); }
+          } else { cell.textContent = '—'; cell.setAttribute('aria-label', `String ${setup.stringCount - string.index}, target ${name}: no saved answers`); }
           row.appendChild(cell);
         });
         body.appendChild(row);
@@ -621,6 +646,7 @@
       text('hint', round.mode === 'random' ? 'Find this note on the requested string. Pitch and string are independently randomized; repeats are possible.' : 'Find this note on the requested string. Frets 0–11. Each pass goes lowest-side to highest-side.');
       // Start timing after assigning the prompt, never after the mute gate.
       round.displayed();
+      updateMuteCue();
       promptAudioGeneration++;
       playReferenceTone();
     }
@@ -637,6 +663,7 @@
     function finish() {
       release();
       resetLive('complete');
+      updateMuteCue();
       el('pause').disabled = true;
       const result = round.summary();
       text('note', ''); text('string', ''); text('progress', round.mode === 'random' ? `Random round complete · ${round.answers.length} accepted` : `Completed: 5 passes · ${round.answers.length} accepted`);
@@ -677,6 +704,7 @@
         if (round.done) finish(); else renderPrompt();
         return;
       }
+      updateMuteCue();
       text('status', round.armed ? 'Ready — pluck the requested string. Wrong pitches do not advance.' : 'Mute all strings briefly; then pluck the requested string.');
     }
     async function acquire() {
@@ -693,7 +721,7 @@
       } catch (e) { if (!cancelled()) fail(e); }
     }
     async function begin() {
-      release(); error = false; round = null; starting = true; updateControls();
+      release(); error = false; round = null; starting = true; updateMuteCue(); updateControls();
       referenceUnlock = wakeReferenceAudio();
       text('audio-status', '');
       resetLive('startup');
@@ -755,6 +783,7 @@
       if (round.paused) { referenceAttempt++; stopReferenceTone(); }
       updateControls();
       resetLive(round.paused ? 'paused' : 'listening');
+      updateMuteCue();
       text('pause', round.paused ? 'Resume' : 'Pause');
       text('status', round.paused ? 'Paused. Resume, mute, then pluck; paused time is excluded.' : 'Mute all strings briefly; then pluck the requested string.');
       lastInput = win.performance.now();

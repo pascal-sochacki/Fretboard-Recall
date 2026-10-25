@@ -116,13 +116,15 @@ Records are only in this browser/device/origin's `localStorage`, key
 `fretboard_recall.records.v1`, grouped by exact instrument/count/ordered
 offsets/reference/indexed open MIDI mapping. Standard mode keeps its existing
 setup key; random-mode entries use that setup key with `:random` appended. The
-progress panel shows all
-available detailed round-time trends (oldest to newest) and a target-pitch-class
+progress panel uses a responsive two-column desktop layout and stacks on narrow
+screens. The round-time trend is a compact chart; open its ordered list to read
+the exact times. It shows all available detailed round-time trends (oldest to
+newest) and a target-pitch-class
 by physical-string table with average accepted-answer time, attempt count, and
 slowest recent answer. Populated heatmap cells are grouped into four relative
 average-time intensity levels for the current heatmap: level 1 is faster and
-level 4 is slower. Every cell includes its numeric average, attempt count,
-slowest time, and written intensity level; higher intensity means slower
+level 4 is slower. Every cell compactly displays its average and slowest time,
+attempt count, and written intensity level. Higher intensity means slower
 accepted responses, and color is not the only indicator. A ranked list also
 highlights the slowest five answers.
 The textual table and labels carry the same information without relying on
