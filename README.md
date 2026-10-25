@@ -14,8 +14,13 @@ Enable the bundled Minigames framework and Note Detection plugin.
 Version **0.2.1** fixes stylesheet delivery. The active-round layout keeps the
 requested note, generic audio feedback and requested-string diagram together in a
 compact desktop row; these stack on narrow screens. Progress and detailed round
-results remain hidden throughout setup and active play. Completion reveals and
-opens the results disclosure; starting or restarting hides and closes it again.
+results remain hidden throughout setup and active play. Completion reveals a
+compact summary with the round total/average and up to five slowest recent accepted
+targets. The bulky results disclosure stays closed; per-string details and
+progress charts/fretboard are nested disclosures. Starting or restarting hides
+the completion panel and closes every disclosure. If local storage cannot be
+read or saved, the summary says slowest answers are unavailable rather than
+showing stale results.
 The manifest declares `styles: "assets/game.css"`; keep that file under `assets/`
 when copying the plugin. FeedBack derives `has_styles` from the manifest and
 injects `/api/plugins/fretboard_recall/assets/game.css?v=0.2.1` as a stylesheet.
@@ -125,10 +130,13 @@ Records are only in this browser/device/origin's `localStorage`, key
 `fretboard_recall.records.v1`, grouped by exact instrument/count/ordered
 offsets/reference/indexed open MIDI mapping. Standard mode keeps its existing
 setup key; random-mode entries use that setup key with `:random` appended. After
-a completed round the open **Round results & progress** disclosure shows the
-personal progress panel,
-which uses a responsive two-column desktop layout and stacks on narrow screens.
-The round-time trend is a compact chart; open its ordered list to read
+a completed round, the compact visible summary shows total and average time and
+up to five slowest accepted targets from recent detailed runs for the exact
+completed setup and mode. Open **Round results & progress** for the optional
+per-string summary and saved progress panel. Open **Progress charts & fretboard**
+within that panel to reveal charts and table. The progress panel uses a responsive
+two-column desktop layout and stacks on narrow screens. The round-time trend is a
+compact chart; open its ordered list to read
 the exact times. It shows all available detailed round-time trends (oldest to
 newest) and a guitar-neck-style table: rows are requested strings in
 highest-side-to-lowest-side order, labeled with their tuned open note, and

@@ -227,9 +227,24 @@ test('complete mounted browser round saves once locally and never submits framew
   assert.ok(d.nodes.get('.fr-strings').children.every(row => row.attributes['data-state'] === 'complete' && !row.attributes['aria-current']));
   assert.equal(d.nodes.get('.fr-summary').children.length, 6); assert.equal(saves, 1);
   assert.equal(d.nodes.get('.fr-results').hidden, false);
-  assert.equal(d.nodes.get('.fr-results').open, true);
+  assert.equal(d.nodes.get('.fr-results').open, false);
+  assert.equal(d.nodes.get('.fr-string-summary').open, false);
+  assert.equal(d.nodes.get('.fr-progress-details').open, false);
+  assert.equal(d.nodes.get('.fr-results-area').hidden, false);
+  assert.equal(d.nodes.get('.fr-game').attributes['data-complete'], 'true');
+  assert.match(d.nodes.get('.fr-round-total').textContent, /Total .* · Average .* per answer/);
+  const worst = d.nodes.get('.fr-history-worst');
+  assert.equal(worst.children[1].children.length, 5);
+  assert.ok(worst.children[1].children.every(item => / · String \d · .* s$/.test(item.textContent)));
+  assert.doesNotMatch(worst.children[1].children[0].textContent, /Round/);
+  assert.ok(d.container.innerHTML.indexOf('fr-completion-panel') < d.container.innerHTML.indexOf('fr-history-trend'));
+  assert.match(d.container.innerHTML, /<details class="fr-results" hidden><summary>Round results &amp; progress/);
+  assert.match(d.container.innerHTML, /<details class="fr-progress-details"><summary>Progress charts &amp; fretboard/);
   assert.match(d.nodes.get('.fr-history-status').textContent, /1 completed rounds.*showing up to the latest 100/);
   const trend = d.nodes.get('.fr-history-trend');
+  d.nodes.get('.fr-progress-details').open = true;
+  assert.equal(d.nodes.get('.fr-progress-details').open, true);
+  d.nodes.get('.fr-progress-details').open = false;
   assert.equal(trend.children[1].attributes.role, 'img');
   assert.equal(trend.children[1].children.length, 1);
   assert.equal(trend.children[2].children[1].children.length, 1);
@@ -267,14 +282,49 @@ test('complete mounted browser round saves once locally and never submits framew
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.equal(d.nodes.get('.fr-results').hidden, true);
   assert.equal(d.nodes.get('.fr-results').open, false);
+  assert.equal(d.nodes.get('.fr-results-area').hidden, true);
+  assert.equal(d.nodes.get('.fr-game').attributes['data-complete'], undefined);
+  assert.equal(d.nodes.get('.fr-string-summary').open, false);
+  assert.equal(d.nodes.get('.fr-progress-details').open, false);
   assert.equal(d.nodes.get('.fr-progress').textContent, 'Pass 1 / 5 · Step 1 / 6 · 0 / 30 accepted');
   assert.deepEqual(b.counts(), { stopped: 1, closed: 2 }); game.stop(); assert.equal(d.timers.size, 0);
 });
+test('failed completion save clears previously rendered slowest answers', async () => {
+  const d = dom(), b = browser(); Object.assign(d.win, b.win);
+  let time = 0, freq = 440;
+  d.win._ndYinDetect = () => ({ freq, confidence: 1 });
+  const answers = Array.from({ length: 30 }, (_, i) => ({ stringIndex: i % 6, pitch: i % 12, durationMs: 100 }));
+  const run = { completedAt: new Date().toISOString(), totalMs: 3000, averageMs: 100, answers };
+  const previous = { [setup.key]: { completed: 1, bestMs: 3000, latest: {}, runs: [run] } };
+  d.win.localStorage = {
+    getItem: key => key === 'slopsmith_notedetect' ? '{"deviceId":"chosen","channel":"mono"}' : JSON.stringify(previous),
+    setItem() { throw new Error('storage unavailable'); },
+  };
+  const game = mount(d.win, d.container, () => 0); await game.begin();
+  const get = name => d.nodes.get(`.fr-${name}`);
+  assert.equal(get('results-area').hidden, true);
+  assert.equal(get('results').hidden, true);
+  const emit = value => { d.advance(85); b.emit(b.frame(value), (time += .085)); };
+  const names = ['C', 'C♯', 'D', 'D♯', 'E', 'F', 'F♯', 'G', 'G♯', 'A', 'A♯', 'B'];
+  const opens = [64, 59, 55, 50, 45, 40];
+  for (let answer = 0; answer < 30; answer++) {
+    for (let i = 0; i < 4; i++) emit(0);
+    const pitch = names.indexOf(get('note').textContent);
+    const string = +get('string').textContent.match(/String (\d)/)[1] - 1;
+    freq = 440 * 2 ** ((opens[string] + ((pitch - opens[string]) % 12 + 12) % 12 - 69) / 12);
+    for (let i = 0; i < 3; i++) emit(.05);
+  }
+  assert.equal(get('retry').textContent, 'Play again');
+  assert.match(get('history-worst').children[0].textContent, /Recent slowest answers are unavailable/);
+  assert.equal(get('history-worst').children.length, 1);
+  assert.equal(get('results-area').hidden, false);
+  game.stop();
+});
 test('results start hidden in one native disclosure and active play uses compact desktop columns', () => {
   const d = dom(), game = mount(d.win, d.container);
-  assert.match(d.container.innerHTML, /<details class="fr-results" hidden><summary>Round results &amp; progress<\/summary>/);
-  assert.doesNotMatch(d.container.innerHTML.match(/<details class="fr-results"[^>]*>([^]*?)<\/details>/)[0].split('>')[0], /\sopen(?:\s|>)/);
-  assert.match(d.container.innerHTML, /class="fr-results-content"><div class="fr-summary"><\/div>[\s\S]*fr-history[\s\S]*fr-warning/);
+  assert.match(d.container.innerHTML, /<div class="fr-results-area" hidden>[\s\S]*<section class="fr-completion-panel"[\s\S]*fr-history-worst[\s\S]*<details class="fr-results" hidden><summary>Round results &amp; progress<\/summary>/);
+  assert.match(d.container.innerHTML, /<details class="fr-results" hidden><summary>Round results &amp; progress<\/summary><div class="fr-results-content">\s*<details class="fr-string-summary"><summary>Per-string round summary/);
+  assert.match(d.container.innerHTML, /<details class="fr-progress-details"><summary>Progress charts &amp; fretboard<\/summary><div class="fr-history-trend"><\/div><div class="fr-history-heatmap"><\/div><\/details>/);
   game.stop();
   const css = fs.readFileSync(require.resolve('../assets/game.css'), 'utf8');
   assert.match(css, /\.fr-active-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1\.1fr\) minmax\(0, \.85fr\) minmax\(250px, 1fr\)/);
@@ -282,6 +332,8 @@ test('results start hidden in one native disclosure and active play uses compact
   assert.match(css, /\.fr-game\s*\{[^}]*padding:\s*clamp\(12px, 2vw, 22px\)/);
   assert.match(css, /\.fr-game \[hidden\]\s*\{\s*display:\s*none !important;/);
   assert.match(css, /\.fr-results > summary\s*\{[^}]*cursor:\s*pointer/);
+  assert.match(css, /\.fr-completion-panel\s*\{[^}]*#193c30/);
+  assert.match(css, /\.fr-history-worst li\s*\{[^}]*white-space:\s*nowrap/);
   assert.match(css, /@media \(max-width: 600px\)[\s\S]*?\.fr-active-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
   assert.match(css, /\.fr-heatmap-wrap\s*\{\s*overflow-x:\s*auto;/);
   assert.match(css, /\.fr-trend-chart\s*\{[^}]*height:\s*44px/);

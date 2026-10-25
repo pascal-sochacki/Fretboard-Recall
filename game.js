@@ -357,11 +357,16 @@
         <section class="fr-strings-panel" aria-label="Physical strings, highest-side to lowest-side"><div class="fr-diagram-heading"><h3>Requested string</h3></div><p class="fr-side">Highest-side · string 1</p><ol class="fr-strings"></ol><p class="fr-side">Lowest-side · string <span class="fr-string-count"></span></p></section>
       </div>
        <div class="fr-feedback"><p class="fr-status" role="status"></p><p class="fr-clock"></p></div>
-       <details class="fr-results" hidden><summary>Round results &amp; progress</summary><div class="fr-results-content"><div class="fr-summary"></div>
-         <section class="fr-history" aria-labelledby="fr-history-title"><h3 id="fr-history-title">Progress for this exact setup</h3><p class="fr-history-note">Saved on this browser/device only. Trends use accepted target answers and round time; the microphone does not identify a physical string or log incorrect notes.</p><p class="fr-history-status" role="status"></p><div class="fr-history-trend"></div><div class="fr-history-heatmap"></div><div class="fr-history-worst"></div></section>
-         <p class="fr-warning">Microphone/DI pitch cannot verify which physical string produced a note shared by multiple strings. Honor the requested string; no string detection is claimed.</p>
-       </div></details>
+        <div class="fr-results-area" hidden>
+          <section class="fr-completion-panel" aria-labelledby="fr-completion-title"><h3 id="fr-completion-title">Round complete</h3><p class="fr-round-total"></p><div class="fr-history-worst"></div></section>
+          <details class="fr-results" hidden><summary>Round results &amp; progress</summary><div class="fr-results-content">
+            <details class="fr-string-summary"><summary>Per-string round summary</summary><div class="fr-summary"></div></details>
+            <section class="fr-history" aria-labelledby="fr-history-title"><h3 id="fr-history-title">Progress for this exact setup</h3><p class="fr-history-note">Saved on this browser/device only. Trends use accepted target answers and round time; the microphone does not identify a physical string or log incorrect notes.</p><p class="fr-history-status" role="status"></p><details class="fr-progress-details"><summary>Progress charts &amp; fretboard</summary><div class="fr-history-trend"></div><div class="fr-history-heatmap"></div></details></section>
+          <p class="fr-warning">Microphone/DI pitch cannot verify which physical string produced a note shared by multiple strings. Honor the requested string; no string detection is claimed.</p>
+          </div></details>
+      </div>
     </section>`;
+    const gameElement = container.querySelector('.fr-game');
     const el = name => container.querySelector(`.fr-${name}`);
     const elements = new Map();
     const cached = name => { if (!elements.has(name)) elements.set(name, el(name)); return elements.get(name); };
@@ -531,14 +536,21 @@
       return item;
     }
     function renderHistory() {
-      const status = cached('history-status'), trend = cached('history-trend'), heatmap = cached('history-heatmap'), worst = cached('history-worst');
-      trend.replaceChildren(); heatmap.replaceChildren(); worst.replaceChildren();
+       const status = cached('history-status'), trend = cached('history-trend'), heatmap = cached('history-heatmap'), worst = cached('history-worst');
+       trend.replaceChildren(); heatmap.replaceChildren(); worst.replaceChildren();
       let record;
-      const mode = round && !round.done ? round.mode : el('random-mode').checked ? 'random' : 'standard';
+       const mode = round ? round.mode : el('random-mode').checked ? 'random' : 'standard';
       try { record = readRecord(win.localStorage, setup, mode); }
-      catch (_) { status.textContent = 'Saved progress could not be read (storage unavailable or corrupted). Existing records were not changed.'; return; }
+       catch (_) { status.textContent = 'Saved progress could not be read (storage unavailable or corrupted).'; renderUnavailableSlowest(); return; }
       status.textContent = record.runs.length ? `${record.completed} completed rounds · personal best ${seconds(record.bestMs)} · showing up to the latest 100 detailed rounds. Older aggregate totals are retained; older answer details are not available.` : record.completed ? `${record.completed} older round${record.completed === 1 ? '' : 's'} saved · best ${seconds(record.bestMs)}. Detailed charts start with your next completed round.` : 'No saved rounds for this exact setup yet.';
-      if (!record.runs.length) return;
+       if (!record.runs.length) { renderUnavailableSlowest(); return; }
+
+       const allAnswers = record.runs.flatMap(run => run.answers);
+       const slowest = allAnswers.slice().sort((a, b) => b.durationMs - a.durationMs).slice(0, 5);
+       worst.appendChild(node('h4', '', 'Slowest recent accepted answers'));
+       const details = node('ol');
+       slowest.forEach(answer => details.appendChild(node('li', '', `${NAMES[answer.pitch]} · String ${setup.stringCount - answer.stringIndex} · ${seconds(answer.durationMs)}`)));
+       worst.appendChild(details);
 
       const heading = node('h4', '', 'Round time trend · oldest to newest');
       trend.appendChild(heading);
@@ -571,8 +583,7 @@
       for (let fret = 0; fret < 12; fret++) { const header = node('th', '', `Fret ${fret}`); header.setAttribute('scope', 'col'); headerRow.appendChild(header); }
       head.appendChild(headerRow); table.appendChild(head);
       const body = node('tbody');
-      const allAnswers = record.runs.flatMap((run, runIndex) => run.answers.map(answer => ({ ...answer, runIndex })));
-      const aggregates = new Map();
+       const aggregates = new Map();
       allAnswers.forEach(answer => {
         const string = setup.strings.find(item => item.index === answer.stringIndex);
         const fret = mod(answer.pitch - mod(string.midi));
@@ -616,14 +627,10 @@
       table.appendChild(body);
       const scroll = node('div', 'fr-heatmap-wrap'); scroll.appendChild(table); heatmap.appendChild(scroll);
 
-      const slowest = allAnswers.slice().sort((a, b) => b.durationMs - a.durationMs).slice(0, 5);
-      worst.appendChild(node('h4', '', 'Slowest recent accepted answers'));
-      const details = node('ol');
-      slowest.forEach(answer => {
-        const roundIndex = record.completed - record.runs.length + answer.runIndex + 1;
-        details.appendChild(node('li', '', `Round ${roundIndex} · ${NAMES[answer.pitch]} · String ${setup.stringCount - answer.stringIndex} · ${seconds(answer.durationMs)}`));
-      });
-      worst.appendChild(details);
+     }
+     function renderUnavailableSlowest() {
+       const worst = cached('history-worst');
+       worst.replaceChildren(node('p', 'fr-history-status', 'Recent slowest answers are unavailable (no saved details or storage could not be read).'));
     }
     function renderProgress() {
       cached('completion').value = round.answers.length;
@@ -682,17 +689,22 @@
       if (adapter && !round?.paused && now - lastInput > 2000) fail(new Error('Live input frames stopped arriving.'));
     }
     function finish() {
-      release();
-      el('round-progress').hidden = false;
-      el('results').hidden = false;
-      el('results').open = true;
+       release();
+       gameElement.setAttribute('data-complete', 'true');
+       el('round-progress').hidden = false;
+       el('results-area').hidden = false;
+       el('results').hidden = false;
+       el('results').open = false;
+       el('string-summary').open = false;
+       el('progress-details').open = false;
       resetLive('complete');
       updateMuteCue();
       el('pause').disabled = true;
       const result = round.summary();
       text('note', ''); text('string', ''); text('progress', round.mode === 'random' ? `Random round complete · ${round.answers.length} accepted` : `Completed: 5 passes · ${round.answers.length} accepted`);
       renderProgress();
-      text('clock', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
+       text('clock', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
+       text('round-total', `Total ${seconds(result.totalMs)} · Average ${seconds(result.averageMs)} per answer`);
       const summary = el('summary'); summary.replaceChildren();
       for (const s of result.strings) {
         const p = doc.createElement('p');
@@ -705,7 +717,10 @@
         const record = storeRecord(win.localStorage, setup, result, round.mode);
         text('status', `Saved only on this browser/device. ${record.completed} completed rounds for this exact setup · Personal best ${seconds(record.bestMs)}. No XP or public submission.`);
         renderHistory();
-      } catch (_) { text('status', 'Round completed, but local records could not be saved (storage unavailable or corrupted). Existing records were not changed; no public submission.'); }
+       } catch (_) {
+         text('status', 'Round completed, but local records could not be saved (storage unavailable or corrupted). No public submission.');
+         renderUnavailableSlowest();
+       }
       updateControls();
     }
     function sample(value) {
@@ -748,6 +763,7 @@
     }
     async function begin() {
       release(); error = false; round = null; starting = true; updateMuteCue(); updateControls();
+      gameElement.removeAttribute('data-complete');
       referenceUnlock = wakeReferenceAudio();
       text('audio-status', '');
       resetLive('startup');
@@ -758,8 +774,11 @@
       text('status', 'Reading current FeedBack instrument and tuning…');
       text('note', ''); text('string', ''); text('clock', ''); text('progress', '');
       el('summary').replaceChildren(); el('pause').disabled = true;
-      el('results').open = false;
-      el('results').hidden = true;
+       el('results').open = false;
+       el('string-summary').open = false;
+       el('progress-details').open = false;
+       el('results-area').hidden = true;
+       el('results').hidden = true;
       el('round-progress').hidden = true;
       const gen = generation;
       try {

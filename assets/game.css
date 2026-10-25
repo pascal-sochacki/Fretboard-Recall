@@ -7,7 +7,8 @@
 .fr-game > .fr-round-progress { grid-area: progress; }
 .fr-game > .fr-feedback { grid-area: feedback; }
 .fr-game > .fr-active-grid { grid-area: active; }
-.fr-game > .fr-results { grid-area: results; }
+.fr-game > .fr-results-area { grid-area: results; }
+.fr-game[data-complete="true"] { grid-template-areas: "header header" "setup setup" "actions actions" "results results" "progress progress" "active active" "feedback feedback"; }
 .fr-game p, .fr-game h2, .fr-game h3 { margin: 0; }
 .fr-game .fr-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .fr-game h2 { color: var(--fr-ink); font-size: clamp(22px, 3vw, 30px); line-height: 1.1; letter-spacing: -.035em; }
@@ -64,9 +65,21 @@
 .fr-game .fr-feedback { margin-top: 0; padding: 7px 11px; border-left: 3px solid #99caff; border-radius: 0 9px 9px 0; background: #1c2c40; }
 .fr-game .fr-status { color: #d4e7ff; min-height: 1.3em; overflow-wrap: anywhere; font-size: 13px; }
 .fr-game .fr-clock { color: var(--fr-muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 1px; }
-.fr-game .fr-summary { font-size: 14px; font-variant-numeric: tabular-nums; }
-.fr-game .fr-summary:not(:empty) { margin-top: 0; padding: 16px; border: 1px solid #485b70; border-radius: 12px; }
-.fr-game .fr-summary p + p { margin-top: 8px; }
+.fr-game .fr-results-area { display: grid; gap: 8px; }
+.fr-game .fr-completion-panel { padding: 9px 12px; border: 1px solid #689c88; border-radius: 10px; background: #193c30; }
+.fr-game .fr-completion-panel h3 { color: #d4ffe9; }
+.fr-game .fr-round-total { margin-top: 3px !important; color: var(--fr-ink); font-size: 13px; font-variant-numeric: tabular-nums; }
+.fr-game .fr-history-worst { margin-top: 4px; }
+.fr-game .fr-history-worst h4 { margin: 5px 0 2px; font-size: 12px; }
+.fr-game .fr-history-worst ol { display: flex; flex-wrap: wrap; gap: 3px 18px; list-style-position: inside; margin: 0; padding: 0; }
+.fr-game .fr-history-worst li { white-space: nowrap; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fr-game .fr-history-worst .fr-history-status { margin-top: 3px; font-size: 12px; }
+.fr-game .fr-string-summary { margin-top: 8px; color: var(--fr-muted); }
+.fr-game .fr-string-summary > summary, .fr-game .fr-progress-details > summary { cursor: pointer; color: var(--fr-accent); font-size: 13px; font-weight: 650; }
+.fr-game .fr-summary { margin-top: 7px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fr-game .fr-summary:not(:empty) { padding: 8px 10px; border: 1px solid #485b70; border-radius: 8px; }
+.fr-game .fr-summary p { white-space: nowrap; }
+.fr-game .fr-summary p + p { margin-top: 3px; }
 .fr-game .fr-history { margin-top: 12px; padding: 12px; border: 1px solid #485b70; border-radius: 12px; background: #152333; }
 .fr-game .fr-history h3, .fr-game .fr-history h4 { color: var(--fr-ink); }
 .fr-game .fr-history h4 { margin: 18px 0 8px; font-size: 15px; }
@@ -87,7 +100,6 @@
 .fr-game .fr-heatmap td[data-attempts][data-intensity="2"] { background: #28513f; }
 .fr-game .fr-heatmap td[data-attempts][data-intensity="3"] { background: #53613b; }
 .fr-game .fr-heatmap td[data-attempts][data-intensity="4"] { background: #75482f; }
-.fr-game .fr-history ol:not(.fr-trend) { padding-left: 22px; color: var(--fr-muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .fr-game .fr-controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
 .fr-game button { font: inherit; font-size: 12px; font-weight: 650; min-height: 36px; padding: 7px 11px; border: 1px solid #71859e; border-radius: 8px; color: var(--fr-ink); background: #25364b; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
 .fr-game button.fr-retry, .fr-game button.fr-input { background: var(--fr-accent); color: #102a24; border-color: var(--fr-accent); }
@@ -106,6 +118,7 @@
 @media (max-width: 600px) {
   .fr-game { border-radius: 16px; }
   .fr-game { grid-template-columns: minmax(0, 1fr); grid-template-areas: "header" "setup" "actions" "progress" "active" "feedback" "results"; }
+  .fr-game[data-complete="true"] { grid-template-areas: "header" "setup" "actions" "results" "progress" "active" "feedback"; }
   .fr-game .fr-active-grid { grid-template-columns: minmax(0, 1fr); }
   .fr-game .fr-strings-panel { grid-column: auto; }
   .fr-game .fr-round-progress { grid-template-columns: 1fr; }
